@@ -21,7 +21,6 @@ type FunctionalSuite struct {
 var _ = Suite(&FunctionalSuite{})
 
 func (s *FunctionalSuite) SetUpSuite(c *C) {
-
 }
 
 func (s *FunctionalSuite) TestSemanticVersionColumnDiscard(c *C) {
@@ -92,7 +91,6 @@ func (s *FunctionalSuite) TestSemanticVersionColumnDiscard(c *C) {
 
 // test read username and password from file
 func (s *FunctionalSuite) TestEnvironmentSettingWithSecretsFiles(c *C) {
-
 	err := os.Setenv("DATA_SOURCE_USER_FILE", "./tests/username_file")
 	c.Assert(err, IsNil)
 	defer UnsetEnvironment(c, "DATA_SOURCE_USER_FILE")
@@ -115,7 +113,6 @@ func (s *FunctionalSuite) TestEnvironmentSettingWithSecretsFiles(c *C) {
 
 // test read DATA_SOURCE_NAME from environment
 func (s *FunctionalSuite) TestEnvironmentSettingWithDns(c *C) {
-
 	envDsn := "postgresql://user:password@localhost:5432/?sslmode=enabled"
 	err := os.Setenv("DATA_SOURCE_NAME", envDsn)
 	c.Assert(err, IsNil)
@@ -129,7 +126,6 @@ func (s *FunctionalSuite) TestEnvironmentSettingWithDns(c *C) {
 
 // test DATA_SOURCE_NAME is used even if username and password environment variables are set
 func (s *FunctionalSuite) TestEnvironmentSettingWithDnsAndSecrets(c *C) {
-
 	envDsn := "postgresql://userDsn:passwordDsn@localhost:55432/?sslmode=disabled"
 	err := os.Setenv("DATA_SOURCE_NAME", envDsn)
 	c.Assert(err, IsNil)
