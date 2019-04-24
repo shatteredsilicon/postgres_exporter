@@ -8,23 +8,22 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/blang/semver"
 	_ "github.com/lib/pq"
-	"gopkg.in/yaml.v2"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
-
-	"strings"
+	"gopkg.in/yaml.v2"
 
 	"github.com/percona/exporter_shared"
 )
@@ -1157,5 +1156,16 @@ func main() {
 	prometheus.MustRegister(exporter)
 
 	// Use our shared code to run server and exit on error. Upstream's code below will not be executed.
-	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricsPath, promhttp.ContinueOnError)
+	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricsPath, promhttp.InstrumentMetricHandler(
+		prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(prometheus.DefaultGatherer,
+			promhttp.HandlerOpts{
+				ErrorLog:      log.NewErrorLogger(),
+				ErrorHandling: promhttp.ContinueOnError,
+			}),
+	))
+
+	http.Handle(*metricsPath, promhttp.Handler())
+	log.Infof("Starting Server: %s", *listenAddress)
+	log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
