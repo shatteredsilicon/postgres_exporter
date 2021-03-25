@@ -11,12 +11,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+BASE_PATH = $(shell pwd)
+BIN_PATH := $(BASE_PATH)/bin
+
+export PATH := $(BIN_PATH):$(PATH)
+
 GO           ?= go
 GOFMT        ?= $(GO)fmt
-FIRST_GOPATH := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))
-PROMU        := $(FIRST_GOPATH)/bin/promu
-STATICCHECK  := $(FIRST_GOPATH)/bin/staticcheck
-GOVENDOR     := $(FIRST_GOPATH)/bin/govendor
+PROMU        := $(BIN_PATH)/promu
+STATICCHECK  := $(BIN_PATH)/staticcheck
 pkgs          = ./...
 
 PREFIX                  ?= $(shell pwd)
@@ -28,11 +31,11 @@ all: vet style staticcheck unused build test
 
 style:
 	@echo ">> checking code style"
-	! $(GOFMT) -d $$(find . -path ./vendor -prune -o -name '*.go' -print) | grep '^'
+	! $(GOFMT) -d $$(find . -type f -name '*.go' -print) | grep '^'
 
 check_license:
 	@echo ">> checking license header"
-	@licRes=$$(for file in $$(find . -type f -iname '*.go' ! -path './vendor/*') ; do \
+	@licRes=$$(for file in $$(find . -type f -iname '*.go') ; do \
                awk 'NR<=3' $$file | grep -Eq "(Copyright|generated|GENERATED)" || echo $$file; \
        done); \
        if [ -n "$${licRes}" ]; then \
@@ -60,10 +63,6 @@ staticcheck: $(STATICCHECK)
 	@echo ">> running staticcheck"
 	$(STATICCHECK) $(pkgs)
 
-unused: $(GOVENDOR)
-	@echo ">> running check for unused packages"
-	@$(GOVENDOR) list +unused | grep . && exit 1 || echo 'No unused packages'
-
 build: promu
 	@echo ">> building binaries"
 	$(PROMU) build --prefix $(PREFIX)
@@ -77,12 +76,9 @@ docker:
 	docker build -t "$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)" .
 
 promu:
-	GOOS= GOARCH= $(GO) get -u github.com/prometheus/promu
+	GOOS= GOARCH= $(GO) build -modfile=tools/go.mod -o $(PROMU) github.com/prometheus/promu
 
-$(FIRST_GOPATH)/bin/staticcheck:
-	GOOS= GOARCH= $(GO) get -u honnef.co/go/tools/cmd/staticcheck
+$(STATICCHECK):
+	GOOS= GOARCH= $(GO) build -modfile=tools/go.mod -o $(STATICCHECK) honnef.co/go/tools/cmd/staticcheck
 
-$(FIRST_GOPATH)/bin/govendor:
-	GOOS= GOARCH= $(GO) get -u github.com/kardianos/govendor
-
-.PHONY: all style check_license format build test vet assets tarball docker promu staticcheck $(FIRST_GOPATH)/bin/staticcheck govendor $(FIRST_GOPATH)/bin/govendor
+.PHONY: all style check_license format build test vet assets tarball docker promu staticcheck $(STATICCHECK)
