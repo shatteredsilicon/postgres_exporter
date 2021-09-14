@@ -656,10 +656,10 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 		level.Warn(logger).Log("msg", "PostgreSQL version is lower than our lowest supported version", "server", server, "version", semanticVersion, "lowest_supported_version", lowestSupportedVersion)
 	}
 
+	server.mappingMtx.Lock()
 	// Check if semantic version changed and recalculate maps if needed.
 	if semanticVersion.NE(server.lastMapVersion) || server.metricMap == nil {
 		level.Info(logger).Log("msg", "Semantic version changed", "server", server, "from", server.lastMapVersion, "to", semanticVersion)
-		server.mappingMtx.Lock()
 
 		// Get Default Metrics only for master database
 		if !e.disableDefaultMetrics && server.master {
@@ -693,9 +693,9 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 				}
 			}
 		}
-
-		server.mappingMtx.Unlock()
 	}
+
+	server.mappingMtx.Unlock()
 
 	// Output the version as a special metric only for master database
 	versionDesc := prometheus.NewDesc(fmt.Sprintf("%s_%s", namespace, staticLabelName),
