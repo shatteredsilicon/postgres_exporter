@@ -515,9 +515,16 @@ func IncludeDatabases(s string) ExporterOpt {
 }
 
 // WithUserQueriesPath configures user's queries path.
-func WithUserQueriesPath(p string) ExporterOpt {
+func WithUserQueriesPath(p map[MetricResolution]string) ExporterOpt {
 	return func(e *Exporter) {
 		e.userQueriesPath = p
+	}
+}
+
+// WithUserQueriesPath configures user's queries path.
+func WithUserQueriesEnabled(p map[MetricResolution]bool) ExporterOpt {
+	return func(e *Exporter) {
+		e.userQueriesEnabled = p
 	}
 }
 
@@ -672,9 +679,10 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 
 		server.lastMapVersion = semanticVersion
 
-		if e.userQueriesPath != "" {
+		if e.userQueriesPath[HR] != "" || e.userQueriesPath[MR] != "" || e.userQueriesPath[LR] != "" {
 			// Clear the metric while a reload is happening
 			e.userQueriesError.Reset()
+		}
 
 			// Calculate the hashsum of the useQueries
 			userQueriesData, err := ioutil.ReadFile(e.userQueriesPath)
@@ -706,6 +714,48 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 			prometheus.UntypedValue, 1, versionString, semanticVersion.String())
 	}
 	return nil
+}
+
+func (e *Exporter) loadCustomQueries(res MetricResolution, version semver.Version, server *Server) {
+	if e.userQueriesPath[res] != "" {
+		fi, err := ioutil.ReadDir(e.userQueriesPath[res])
+		if err != nil {
+			log.Errorf("failed read dir %q for custom query. reason: %s", e.userQueriesPath[res], err)
+			return
+		}
+
+		for _, v := range fi {
+			if v.IsDir() {
+				continue
+			}
+
+			if filepath.Ext(v.Name()) == ".yml" || filepath.Ext(v.Name()) == ".yaml" {
+				path := filepath.Join(e.userQueriesPath[res], v.Name())
+				e.addCustomQueriesFromFile(path, version, server)
+			}
+		}
+	}
+}
+
+func (e *Exporter) addCustomQueriesFromFile(path string, version semver.Version, server *Server) {
+	// Calculate the hashsum of the useQueries
+	userQueriesData, err := ioutil.ReadFile(path)
+	if err != nil {
+		log.Errorln("Failed to reload user queries:", path, err)
+		e.userQueriesError.WithLabelValues(path, "").Set(1)
+		return
+	}
+
+	hashsumStr := fmt.Sprintf("%x", sha256.Sum256(userQueriesData))
+
+	if err := addQueries(userQueriesData, version, server); err != nil {
+		log.Errorln("Failed to reload user queries:", path, err)
+		e.userQueriesError.WithLabelValues(path, hashsumStr).Set(1)
+		return
+	}
+
+	// Mark user queries as successfully loaded
+	e.userQueriesError.WithLabelValues(path, hashsumStr).Set(0)
 }
 
 func (e *Exporter) scrape(ch chan<- prometheus.Metric) {

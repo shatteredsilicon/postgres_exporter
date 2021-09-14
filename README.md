@@ -1,13 +1,10 @@
-[![Build Status](https://circleci.com/gh/prometheus-community/postgres_exporter.svg?style=svg)](https://circleci.com/gh/prometheus-community/postgres_exporter)
-[![Coverage Status](https://coveralls.io/repos/github/prometheus-community/postgres_exporter/badge.svg?branch=master)](https://coveralls.io/github/prometheus-community/postgres_exporter?branch=master)
-[![Go Report Card](https://goreportcard.com/badge/github.com/prometheus-community/postgres_exporter)](https://goreportcard.com/report/github.com/prometheus-community/postgres_exporter)
-[![Docker Pulls](https://img.shields.io/docker/pulls/prometheuscommunity/postgres-exporter.svg)](https://hub.docker.com/r/prometheuscommunity/postgres-exporter/tags)
+[![Go Report Card](https://goreportcard.com/badge/github.com/percona/postgres_exporter)](https://goreportcard.com/report/github.com/percona/postgres_exporter)
+[![Discord](https://img.shields.io/discord/808660945513611334?style=flat)](http://per.co.na/discord)
 
 # PostgreSQL Server Exporter
 
 Prometheus exporter for PostgreSQL server metrics.
-
-CI Tested PostgreSQL versions: `9.4`, `9.5`, `9.6`, `10`, `11`, `12`, `13`
+Supported Postgres versions: 9.1 and up.
 
 ## Quick Start
 This package is available for Docker:
@@ -15,26 +12,8 @@ This package is available for Docker:
 # Start an example database
 docker run --net=host -it --rm -e POSTGRES_PASSWORD=password postgres
 # Connect to it
-docker run \
-  --net=host \
-  -e DATA_SOURCE_NAME="postgresql://postgres:password@localhost:5432/postgres?sslmode=disable" \
-  quay.io/prometheuscommunity/postgres-exporter
+docker run --net=host -e DATA_SOURCE_NAME="postgresql://postgres:password@localhost:5432/?sslmode=disable" percona/postgres_exporter
 ```
-
-## Building and running
-
-    git clone https://github.com/prometheus-community/postgres_exporter.git
-    cd postgres_exporter
-    make build
-    ./postgres_exporter <flags>
-
-To build the Docker image:
-
-    make promu
-    promu crossbuild -p linux/amd64 -p linux/armv7 -p linux/amd64 -p linux/ppc64le
-    make docker
-
-This will build the docker image as `prometheuscommunity/postgres_exporter:${branch}`.
 
 ### Flags
 
@@ -54,7 +33,7 @@ This will build the docker image as `prometheuscommunity/postgres_exporter:${bra
   Use the flag if you don't want to scrape `pg_settings`.
 
 * `auto-discover-databases`
-  Whether to discover the databases on a server dynamically.
+  Enable discovering databases automatically.
 
 * `extend.query-path`
   Path to a YAML file containing custom queries to run. Check out [`queries.yaml`](queries.yaml)
@@ -129,7 +108,7 @@ The following environment variables configure the exporter:
   Use the flag if you don't want to scrape `pg_settings`. Value can be `true` or `false`. Defauls is `false`.
 
 * `PG_EXPORTER_AUTO_DISCOVER_DATABASES`
-  Whether to discover the databases on a server dynamically. Value can be `true` or `false`. Defauls is `false`.
+  Enable discovering databases automatically. Value can be `true` or `false`. Defauls is `false`.
 
 * `PG_EXPORTER_EXTEND_QUERY_PATH`
   Path to a YAML file containing custom queries to run. Check out [`queries.yaml`](queries.yaml)

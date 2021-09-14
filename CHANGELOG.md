@@ -1,25 +1,3 @@
-## 0.10.0 / 2021-07-08
-
-* [ENHANCEMENT] Add ability to set included databases when autoDiscoverDatabases is enabled #499
-* [BUGFIX] fix pg_replication_slots on postgresql versions 9.4 <> 10.0 #537
-
-## 0.9.0 / 2021-03-01
-
-First release under the Prometheus Community organisation.
-
-* [CHANGE] Update build to use standard Prometheus promu/Dockerfile
-* [ENHANCEMENT] Remove duplicate column in queries.yml #433
-* [ENHANCEMENT] Add query for 'pg_replication_slots' #465
-* [ENHANCEMENT] Allow a custom prefix for metric namespace #387
-* [ENHANCEMENT] Improve PostgreSQL replication lag detection #395
-* [ENHANCEMENT] Support connstring syntax when discovering databases #473
-* [ENHANCEMENT] Detect SIReadLock locks in the pg_locks metric #421
-* [BUGFIX] Fix pg_database_size_bytes metric in queries.yaml #357
-* [BUGFIX] Don't ignore errors in parseUserQueries #362
-* [BUGFIX] Fix queries.yaml for AWS RDS #370
-* [BUGFIX] Recover when connection cannot be established at startup #415
-* [BUGFIX] Don't retry if an error occurs #426
-* [BUGFIX] Do not panic on incorrect env #457
 
 ## 0.8.0 / 2019-11-25
 
