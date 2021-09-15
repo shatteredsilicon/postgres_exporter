@@ -52,18 +52,12 @@ docker run --net=host -e DATA_SOURCE_NAME="postgresql://postgres:password@localh
 * `exclude-databases`
   A list of databases to remove when autoDiscoverDatabases is enabled.
 
-* `include-databases`
-  A list of databases to only include when autoDiscoverDatabases is enabled.
-
 * `log.level`
-  Set logging level: one of `debug`, `info`, `warn`, `error`.
+  Set logging level: one of `debug`, `info`, `warn`, `error`, `fatal`
 
 * `log.format`
-  Set the log format: one of `logfmt`, `json`.
-
-* `web.config.file`
-  Configuration file to use TLS and/or basic authentication. The format of the
-  file is described [in the exporter-toolkit repository](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md).
+  Set the log output target and format. e.g. `logger:syslog?appname=bob&local=7` or `logger:stdout?json=true`
+  Defaults to `logger:stderr`.
 
 ### Environment Variables
 
@@ -74,9 +68,8 @@ The following environment variables configure the exporter:
   URI may contain the username and password to connect with.
 
 * `DATA_SOURCE_URI`
-   an alternative to `DATA_SOURCE_NAME` which exclusively accepts the hostname
-   without a username and password component. For example, `my_pg_hostname` or
-   `my_pg_hostname?sslmode=disable`.
+   an alternative to `DATA_SOURCE_NAME` which exclusively accepts the raw URI
+   without a username and password component.
 
 * `DATA_SOURCE_URI_FILE`
    The same as above but reads the URI from a file.
@@ -119,13 +112,6 @@ The following environment variables configure the exporter:
 
 * `PG_EXPORTER_EXCLUDE_DATABASES`
   A comma-separated list of databases to remove when autoDiscoverDatabases is enabled. Default is empty string.
-
-* `PG_EXPORTER_INCLUDE_DATABASES`
-  A comma-separated list of databases to only include when autoDiscoverDatabases is enabled. Default is empty string,
-  means allow all.
-
-* `PG_EXPORTER_METRIC_PREFIX`
-  A prefix to use for each of the default metrics exported by postgres-exporter. Default is `pg`
 
 Settings set by environment variables starting with `PG_` will be overwritten by the corresponding CLI flag if given.
 
@@ -171,14 +157,11 @@ flag. This removes all built-in metrics, and uses only metrics defined by querie
 (so you must supply one, otherwise the exporter will return nothing but internal statuses and not your database).
 
 ### Automatically discover databases
-To scrape metrics from all databases on a database server, the database DSN's can be dynamically discovered via the
-`--auto-discover-databases` flag. When true, `SELECT datname FROM pg_database WHERE datallowconn = true AND datistemplate = false and datname != current_database()` is run for all configured DSN's. From the
+To scrape metrics from all databases on a database server, the database DSN's can be dynamically discovered via the 
+`--auto-discover-databases` flag. When true, `SELECT datname FROM pg_database WHERE datallowconn = true AND datistemplate = false and datname != current_database()` is run for all configured DSN's. From the 
 result a new set of DSN's is created for which the metrics are scraped.
 
 In addition, the option `--exclude-databases` adds the possibily to filter the result from the auto discovery to discard databases you do not need.
-
-If you want to include only subset of databases, you can use option `--include-databases`. Exporter still makes request to
-`pg_database` table, but do scrape from only if database is in include list.
 
 ### Running as non-superuser
 
@@ -245,18 +228,6 @@ AS
   SELECT * FROM get_pg_stat_replication();
 
 GRANT SELECT ON postgres_exporter.pg_stat_replication TO postgres_exporter;
-
-CREATE OR REPLACE FUNCTION get_pg_stat_statements() RETURNS SETOF pg_stat_statements AS
-$$ SELECT * FROM public.pg_stat_statements; $$
-LANGUAGE sql
-VOLATILE
-SECURITY DEFINER;
-
-CREATE OR REPLACE VIEW postgres_exporter.pg_stat_statements
-AS
-  SELECT * FROM get_pg_stat_statements();
-
-GRANT SELECT ON postgres_exporter.pg_stat_statements TO postgres_exporter;
 ```
 
 > **NOTE**
@@ -265,13 +236,9 @@ GRANT SELECT ON postgres_exporter.pg_stat_statements TO postgres_exporter;
 > DATA_SOURCE_NAME=postgresql://postgres_exporter:password@localhost:5432/postgres?sslmode=disable
 > ```
 
-
-## Running the tests
-```
-# Run the unit tests
-make test
-# Start the test database with docker
-docker run -p 5432:5432 -e POSTGRES_DB=circle_test -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=test -d postgres
-# Run the integration tests
-DATA_SOURCE_NAME='postgresql://postgres:test@localhost:5432/circle_test?sslmode=disable' GOOPTS='-v -tags integration' make test
-```
+# Hacking
+* To build a copy for your current architecture run `go run mage.go binary`.
+  This will create a symlink to the just built binary in the root directory.
+* To build release tar balls run `go run mage.go release`.
+* Build system is a bit temperamental at the moment since the conversion to mage - I am working on getting it
+  to be a perfect out of the box experience, but am time-constrained on it at the moment.

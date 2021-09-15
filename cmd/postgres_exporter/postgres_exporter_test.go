@@ -6,11 +6,9 @@ package main
 import (
 	"database/sql"
 	"io/ioutil"
-	"math"
 	"os"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/blang/semver"
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,11 +111,7 @@ func (s *FunctionalSuite) TestEnvironmentSettingWithSecretsFiles(c *C) {
 
 	expected := "postgresql://custom_username$&+,%2F%3A;=%3F%40:custom_password$&+,%2F%3A;=%3F%40@localhost:5432/?sslmode=disable"
 
-	dsn, err := getDataSources()
-	if err != nil {
-		c.Errorf("Unexpected error reading datasources")
-	}
-
+	dsn := getDataSources()
 	if len(dsn) == 0 {
 		c.Errorf("Expected one data source, zero found")
 	}
@@ -133,11 +127,7 @@ func (s *FunctionalSuite) TestEnvironmentSettingWithDns(c *C) {
 	c.Assert(err, IsNil)
 	defer UnsetEnvironment(c, "DATA_SOURCE_NAME")
 
-	dsn, err := getDataSources()
-	if err != nil {
-		c.Errorf("Unexpected error reading datasources")
-	}
-
+	dsn := getDataSources()
 	if len(dsn) == 0 {
 		c.Errorf("Expected one data source, zero found")
 	}
@@ -161,11 +151,7 @@ func (s *FunctionalSuite) TestEnvironmentSettingWithDnsAndSecrets(c *C) {
 	c.Assert(err, IsNil)
 	defer UnsetEnvironment(c, "DATA_SOURCE_PASS")
 
-	dsn, err := getDataSources()
-	if err != nil {
-		c.Errorf("Unexpected error reading datasources")
-	}
-
+	dsn := getDataSources()
 	if len(dsn) == 0 {
 		c.Errorf("Expected one data source, zero found")
 	}
@@ -337,29 +323,12 @@ func UnsetEnvironment(c *C, d string) {
 	c.Assert(err, IsNil)
 }
 
-type isNaNChecker struct {
-	*CheckerInfo
-}
-
-var IsNaN Checker = &isNaNChecker{
-	&CheckerInfo{Name: "IsNaN", Params: []string{"value"}},
-}
-
-func (checker *isNaNChecker) Check(params []interface{}, names []string) (result bool, error string) {
-	param, ok := (params[0]).(float64)
-	if !ok {
-		return false, "obtained value type is not a float"
-	}
-	return math.IsNaN(param), ""
-}
-
 // test boolean metric type gets converted to float
 func (s *FunctionalSuite) TestBooleanConversionToValueAndString(c *C) {
 	type TestCase struct {
 		input          interface{}
 		expectedString string
 		expectedValue  float64
-		expectedCount  uint64
 		expectedOK     bool
 	}
 
@@ -368,71 +337,19 @@ func (s *FunctionalSuite) TestBooleanConversionToValueAndString(c *C) {
 			input:          true,
 			expectedString: "true",
 			expectedValue:  1.0,
-			expectedCount:  1,
 			expectedOK:     true,
 		},
 		{
 			input:          false,
 			expectedString: "false",
 			expectedValue:  0.0,
-			expectedCount:  0,
-			expectedOK:     true,
-		},
-		{
-			input:          nil,
-			expectedString: "",
-			expectedValue:  math.NaN(),
-			expectedCount:  0,
-			expectedOK:     true,
-		},
-		{
-			input:          TestCase{},
-			expectedString: "",
-			expectedValue:  math.NaN(),
-			expectedCount:  0,
-			expectedOK:     false,
-		},
-		{
-			input:          123.0,
-			expectedString: "123",
-			expectedValue:  123.0,
-			expectedCount:  123,
-			expectedOK:     true,
-		},
-		{
-			input:          "123",
-			expectedString: "123",
-			expectedValue:  123.0,
-			expectedCount:  123,
-			expectedOK:     true,
-		},
-		{
-			input:          []byte("123"),
-			expectedString: "123",
-			expectedValue:  123.0,
-			expectedCount:  123,
-			expectedOK:     true,
-		},
-		{
-			input:          time.Unix(1600000000, 0),
-			expectedString: "1600000000",
-			expectedValue:  1600000000.0,
-			expectedCount:  1600000000,
 			expectedOK:     true,
 		},
 	}
 
 	for _, cs := range cases {
 		value, ok := dbToFloat64(cs.input)
-		if math.IsNaN(cs.expectedValue) {
-			c.Assert(value, IsNaN)
-		} else {
-			c.Assert(value, Equals, cs.expectedValue)
-		}
-		c.Assert(ok, Equals, cs.expectedOK)
-
-		count, ok := dbToUint64(cs.input)
-		c.Assert(count, Equals, cs.expectedCount)
+		c.Assert(value, Equals, cs.expectedValue)
 		c.Assert(ok, Equals, cs.expectedOK)
 
 		str, ok := dbToString(cs.input)

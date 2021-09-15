@@ -1,7 +1,13 @@
-ARG ARCH="amd64"
-ARG OS="linux"
-FROM quay.io/prometheus/busybox-${OS}-${ARCH}:latest
-LABEL maintainer="The Prometheus Authors <prometheus-developers@googlegroups.com>"
+FROM debian:7.11-slim
+RUN useradd -u 20001 postgres_exporter
 
 COPY --from=0 /etc/passwd /etc/passwd
 USER postgres_exporter
+
+ARG binary
+
+COPY $binary /postgres_exporter
+
+EXPOSE 9187
+
+ENTRYPOINT [ "/postgres_exporter" ]
