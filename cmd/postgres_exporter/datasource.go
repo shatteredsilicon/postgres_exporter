@@ -44,7 +44,9 @@ func (e *Exporter) discoverDatabaseDSNs() []string {
 		// If autoDiscoverDatabases is true, set first dsn as master database (Default: false)
 		server.master = true
 
+		server.mappingMtx.Lock()
 		databaseNames, err := queryDatabases(server)
+		server.mappingMtx.Unlock()
 		if err != nil {
 			log.Errorf("Error querying databases (%s): %v", loggableDSN(dsn), err)
 			continue
