@@ -19,6 +19,7 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/go-kit/kit/log/level"
+	"log "github.com/sirupsen/logrus""
 	"gopkg.in/yaml.v2"
 )
 
@@ -210,7 +211,7 @@ func parseUserQueries(content []byte) (map[string]intermediateMetricMap, map[str
 	newQueryOverrides := make(map[string]string)
 
 	for metric, specs := range userQueries {
-		level.Debug(logger).Log("msg", "New user metric namespace from YAML metric", "metric", metric, "cache_seconds", specs.CacheSeconds)
+		log.Debugln("New user metric namespace from YAML:", metric, "Will cache results for:", specs.CacheSeconds)
 		newQueryOverrides[metric] = specs.Query
 		metricMap, ok := metricMaps[metric]
 		if !ok {
@@ -253,7 +254,7 @@ func parseUserQueries(content []byte) (map[string]intermediateMetricMap, map[str
 func addQueries(content []byte, pgVersion semver.Version, server *Server) error {
 	metricMaps, newQueryOverrides, err := parseUserQueries(content)
 	if err != nil {
-		return err
+		return nil
 	}
 	// Convert the loaded metric map into exporter representation
 	partialExporterMap := makeDescMap(pgVersion, server.labels, metricMaps)
@@ -262,9 +263,9 @@ func addQueries(content []byte, pgVersion semver.Version, server *Server) error 
 	for k, v := range partialExporterMap {
 		_, found := server.metricMap[k]
 		if found {
-			level.Debug(logger).Log("msg", "Overriding metric from user YAML file", "metric", k)
+			log.Debugln("Overriding metric", k, "from user YAML file.")
 		} else {
-			level.Debug(logger).Log("msg", "Adding new metric from user YAML file", "metric", k)
+			log.Debugln("Adding new metric", k, "from user YAML file.")
 		}
 		server.metricMap[k] = v
 	}
@@ -273,9 +274,9 @@ func addQueries(content []byte, pgVersion semver.Version, server *Server) error 
 	for k, v := range newQueryOverrides {
 		_, found := server.queryOverrides[k]
 		if found {
-			level.Debug(logger).Log("msg", "Overriding query override from user YAML file", "query_override", k)
+			log.Debugln("Overriding query override", k, "from user YAML file.")
 		} else {
-			level.Debug(logger).Log("msg", "Adding new query override from user YAML file", "query_override", k)
+			log.Debugln("Adding new query override", k, "from user YAML file.")
 		}
 		server.queryOverrides[k] = v
 	}

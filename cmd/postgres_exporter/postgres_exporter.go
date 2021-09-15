@@ -9,10 +9,8 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,68 +18,10 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/lib/pq"
-	"github.com/percona/exporter_shared"
-	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
-	"github.com/prometheus/common/version"
-	"gopkg.in/alecthomas/kingpin.v2"
-)
-
-// Branch is set during build to the git branch.
-var Branch string
-
-// BuildDate is set during build to the ISO-8601 date and time.
-var BuildDate string
-
-// Revision is set during build to the git commit revision.
-var Revision string
-
-// Version is set during build to the git describe version
-// (semantic version)-(commitish) form.
-var Version = "0.0.1-rev"
-
-// VersionShort is set during build to the semantic version.
-var VersionShort = "0.0.1"
-
-var (
-	listenAddress                 = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9187").Envar("PG_EXPORTER_WEB_LISTEN_ADDRESS").String()
-	metricPath                    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").Envar("PG_EXPORTER_WEB_TELEMETRY_PATH").String()
-	disableDefaultMetrics         = kingpin.Flag("disable-default-metrics", "Do not include default metrics.").Default("false").Envar("PG_EXPORTER_DISABLE_DEFAULT_METRICS").Bool()
-	disableSettingsMetrics        = kingpin.Flag("disable-settings-metrics", "Do not include pg_settings metrics.").Default("false").Envar("PG_EXPORTER_DISABLE_SETTINGS_METRICS").Bool()
-	autoDiscoverDatabases         = kingpin.Flag("auto-discover-databases", "Whether to discover the databases on a server dynamically.").Default("false").Envar("PG_EXPORTER_AUTO_DISCOVER_DATABASES").Bool()
-	excludeDatabases              = kingpin.Flag("exclude-databases", "A list of databases to remove when autoDiscoverDatabases is enabled").Default("").Envar("PG_EXPORTER_EXCLUDE_DATABASES").String()
-	onlyDumpMaps                  = kingpin.Flag("dumpmaps", "Do not run, simply dump the maps.").Bool()
-	constantLabelsList            = kingpin.Flag("constantLabels", "A list of label=value separated by comma(,).").Default("").Envar("PG_EXPORTER_CONSTANT_LABELS").String()
-	collectCustomQueryLr          = kingpin.Flag("collect.custom_query.lr", "Enable custom queries with low resolution directory.").Default("false").Envar("PG_EXPORTER_EXTEND_QUERY_LR").Bool()
-	collectCustomQueryMr          = kingpin.Flag("collect.custom_query.mr", "Enable custom queries with medium resolution directory.").Default("false").Envar("PG_EXPORTER_EXTEND_QUERY_MR").Bool()
-	collectCustomQueryHr          = kingpin.Flag("collect.custom_query.hr", "Enable custom queries with high resolution directory.").Default("false").Envar("PG_EXPORTER_EXTEND_QUERY_HR").Bool()
-	collectCustomQueryLrDirectory = kingpin.Flag("collect.custom_query.lr.directory", "Path to custom queries with low resolution directory.").Envar("PG_EXPORTER_EXTEND_QUERY_LR_PATH").String()
-	collectCustomQueryMrDirectory = kingpin.Flag("collect.custom_query.mr.directory", "Path to custom queries with medium resolution directory.").Envar("PG_EXPORTER_EXTEND_QUERY_MR_PATH").String()
-	collectCustomQueryHrDirectory = kingpin.Flag("collect.custom_query.hr.directory", "Path to custom queries with high resolution directory.").Envar("PG_EXPORTER_EXTEND_QUERY_HR_PATH").String()
-)
-
-// Metric name parts.
-const (
-	// Namespace for all metrics.
-	namespace = "pg"
-	// Subsystems.
-	exporter = "exporter"
-	// Metric label used for static string data thats handy to send to Prometheus
-	// e.g. version
-	staticLabelName = "static"
-	// Metric label used for server identification.
-	serverLabelName = "server"
-)
-
-type MetricResolution string
-
-const (
-	LR MetricResolution = "lr"
-	MR MetricResolution = "mr"
-	HR MetricResolution = "hr"
+	"log "github.com/sirupsen/logrus""
 )
 
 // ColumnUsage should be one of several enum values which describe how a
@@ -476,115 +416,6 @@ var queryOverrides = map[string][]OverrideQuery{
 			`,
 		},
 	},
-}
-
-// Convert the query override file to the version-specific query override file
-// for the exporter.
-func makeQueryOverrideMap(pgVersion semver.Version, queryOverrides map[string][]OverrideQuery) map[string]string {
-	resultMap := make(map[string]string)
-	for name, overrideDef := range queryOverrides {
-		// Find a matching semver. We make it an error to have overlapping
-		// ranges at test-time, so only 1 should ever match.
-		matched := false
-		for _, queryDef := range overrideDef {
-			if queryDef.versionRange(pgVersion) {
-				resultMap[name] = queryDef.query
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			log.Warnln("No query matched override for", name, "- disabling metric space.")
-			resultMap[name] = ""
-		}
-	}
-
-	return resultMap
-}
-
-func parseUserQueries(content []byte) (map[string]intermediateMetricMap, map[string]string, error) {
-	var userQueries UserQueries
-
-	err := yaml.Unmarshal(content, &userQueries)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Stores the loaded map representation
-	metricMaps := make(map[string]intermediateMetricMap)
-	newQueryOverrides := make(map[string]string)
-
-	for metric, specs := range userQueries {
-		log.Debugln("New user metric namespace from YAML:", metric, "Will cache results for:", specs.CacheSeconds)
-		newQueryOverrides[metric] = specs.Query
-		metricMap, ok := metricMaps[metric]
-		if !ok {
-			// Namespace for metric not found - add it.
-			newMetricMap := make(map[string]ColumnMapping)
-			metricMap = intermediateMetricMap{
-				columnMappings: newMetricMap,
-				master:         specs.Master,
-				cacheSeconds:   specs.CacheSeconds,
-			}
-			metricMaps[metric] = metricMap
-		}
-		for _, metric := range specs.Metrics {
-			for name, mappingOption := range metric {
-				var columnMapping ColumnMapping
-				tmpUsage, _ := stringToColumnUsage(mappingOption.Usage)
-				columnMapping.usage = tmpUsage
-				columnMapping.description = mappingOption.Description
-
-				// TODO: we should support cu
-				columnMapping.mapping = nil
-				// Should we support this for users?
-				columnMapping.supportedVersions = nil
-
-				metricMap.columnMappings[name] = columnMapping
-			}
-		}
-	}
-	return metricMaps, newQueryOverrides, nil
-}
-
-// Add queries to the builtinMetricMaps and queryOverrides maps. Added queries do not
-// respect version requirements, because it is assumed that the user knows
-// what they are doing with their version of postgres.
-//
-// This function modifies metricMap and queryOverrideMap to contain the new
-// queries.
-// TODO: test code for all cu.
-// TODO: the YAML this supports is "non-standard" - we should move away from it.
-func addQueries(content []byte, pgVersion semver.Version, server *Server) error {
-	metricMaps, newQueryOverrides, err := parseUserQueries(content)
-	if err != nil {
-		return nil
-	}
-	// Convert the loaded metric map into exporter representation
-	partialExporterMap := makeDescMap(pgVersion, server.labels, metricMaps)
-
-	// Merge the two maps (which are now quite flatteend)
-	for k, v := range partialExporterMap {
-		_, found := server.metricMap[k]
-		if found {
-			log.Debugln("Overriding metric", k, "from user YAML file.")
-		} else {
-			log.Debugln("Adding new metric", k, "from user YAML file.")
-		}
-		server.metricMap[k] = v
-	}
-
-	// Merge the query override map
-	for k, v := range newQueryOverrides {
-		_, found := server.queryOverrides[k]
-		if found {
-			log.Debugln("Overriding query override", k, "from user YAML file.")
-		} else {
-			log.Debugln("Adding new query override", k, "from user YAML file.")
-		}
-		server.queryOverrides[k] = v
-	}
-	return nil
 }
 
 // Turn the MetricMap column mapping into a prometheus descriptor mapping.
@@ -1600,76 +1431,6 @@ func (e *Exporter) discoverDatabaseDSNs() []string {
 	return result
 }
 
-func (e *Exporter) scrapeDSN(ch chan<- prometheus.Metric, dsn string) error {
-	server, err := e.servers.GetServer(dsn)
-
-	if err != nil {
-		return &ErrorConnectToServer{fmt.Sprintf("Error opening connection to database (%s): %s", loggableDSN(dsn), err.Error())}
-	}
-
-	// Check if autoDiscoverDatabases is false, set dsn as master database (Default: false)
-	if !e.autoDiscoverDatabases {
-		server.master = true
-	}
-
-	// Check if map versions need to be updated
-	if err := e.checkMapVersions(ch, server); err != nil {
-		log.Warnln("Proceeding with outdated query maps, as the Postgres version could not be determined:", err)
-	}
-
-	return server.Scrape(ch, e.disableSettingsMetrics)
-}
-
-// try to get the DataSource
-// DATA_SOURCE_NAME always wins so we do not break older versions
-// reading secrets from files wins over secrets in environment variables
-// DATA_SOURCE_NAME > DATA_SOURCE_{USER|PASS}_FILE > DATA_SOURCE_{USER|PASS}
-func getDataSources() []string {
-	var dsn = os.Getenv("DATA_SOURCE_NAME")
-	if len(dsn) == 0 {
-		var user string
-		var pass string
-		var uri string
-
-		if len(os.Getenv("DATA_SOURCE_USER_FILE")) != 0 {
-			fileContents, err := ioutil.ReadFile(os.Getenv("DATA_SOURCE_USER_FILE"))
-			if err != nil {
-				panic(err)
-			}
-			user = strings.TrimSpace(string(fileContents))
-		} else {
-			user = os.Getenv("DATA_SOURCE_USER")
-		}
-
-		if len(os.Getenv("DATA_SOURCE_PASS_FILE")) != 0 {
-			fileContents, err := ioutil.ReadFile(os.Getenv("DATA_SOURCE_PASS_FILE"))
-			if err != nil {
-				panic(err)
-			}
-			pass = strings.TrimSpace(string(fileContents))
-		} else {
-			pass = os.Getenv("DATA_SOURCE_PASS")
-		}
-
-		ui := url.UserPassword(user, pass).String()
-
-		if len(os.Getenv("DATA_SOURCE_URI_FILE")) != 0 {
-			fileContents, err := ioutil.ReadFile(os.Getenv("DATA_SOURCE_URI_FILE"))
-			if err != nil {
-				panic(err)
-			}
-			uri = strings.TrimSpace(string(fileContents))
-		} else {
-			uri = os.Getenv("DATA_SOURCE_URI")
-		}
-
-		dsn = "postgresql://" + ui + "@" + uri
-
-		return []string{dsn}
-	}
-	return strings.Split(dsn, ",")
-}
-
 func contains(a []string, x string) bool {
 	for _, n := range a {
 		if x == n {
@@ -1677,67 +1438,6 @@ func contains(a []string, x string) bool {
 		}
 	}
 	return false
-}
-
-func main() {
-	kingpin.Version(fmt.Sprintf("postgres_exporter %s (built with %s)\n", Version, runtime.Version()))
-	log.AddFlags(kingpin.CommandLine)
-	kingpin.Parse()
-
-	log.Infoln("Starting postgres_exporter", version.Info())
-	log.Infoln("Build context", version.BuildContext())
-
-	if *onlyDumpMaps {
-		dumpMaps()
-		return
-	}
-
-	dsn := getDataSources()
-	if len(dsn) == 0 {
-		log.Fatal("couldn't find environment variables describing the datasource to use")
-	}
-
-	queriesEnabled := map[MetricResolution]bool{
-		HR: *collectCustomQueryHr,
-		MR: *collectCustomQueryMr,
-		LR: *collectCustomQueryLr,
-	}
-
-	queriesPath := map[MetricResolution]string{
-		HR: *collectCustomQueryHrDirectory,
-		MR: *collectCustomQueryMrDirectory,
-		LR: *collectCustomQueryLrDirectory,
-	}
-
-	exporter := NewExporter(dsn,
-		DisableDefaultMetrics(*disableDefaultMetrics),
-		DisableSettingsMetrics(*disableSettingsMetrics),
-		AutoDiscoverDatabases(*autoDiscoverDatabases),
-		WithUserQueriesEnabled(queriesEnabled),
-		WithUserQueriesPath(queriesPath),
-		WithConstantLabels(*constantLabelsList),
-		ExcludeDatabases(*excludeDatabases),
-	)
-	defer func() {
-		exporter.servers.Close()
-	}()
-
-	prometheus.MustRegister(exporter)
-
-	version.Branch = Branch
-	version.BuildDate = BuildDate
-	version.Revision = Revision
-	version.Version = VersionShort
-	prometheus.MustRegister(version.NewCollector("postgres_exporter"))
-
-	psCollector := prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{})
-	goCollector := prometheus.NewGoCollector()
-
-	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricPath, newHandler(map[string]prometheus.Collector{
-		"exporter":         exporter,
-		"standard.process": psCollector,
-		"standard.go":      goCollector,
-	}))
 }
 
 // handler wraps an unfiltered http.Handler but uses a filtered handler,

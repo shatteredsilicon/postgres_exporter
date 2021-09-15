@@ -14,17 +14,13 @@
 package main
 
 import (
-	"net/http"
-	"os"
+	"fmt"
+	"runtime"
 
 	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
+	"github.com/percona/exporter_shared"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/promlog"
-	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
-	"github.com/prometheus/exporter-toolkit/web"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
@@ -91,69 +87,62 @@ const (
 )
 
 func main() {
-	kingpin.Version(version.Print(exporterName))
-	promlogConfig := &promlog.Config{}
-	flag.AddFlags(kingpin.CommandLine, promlogConfig)
-	kingpin.HelpFlag.Short('h')
+	kingpin.Version(fmt.Sprintf("postgres_exporter %s (built with %s)\n", Version, runtime.Version()))
+	log.AddFlags(kingpin.CommandLine)
 	kingpin.Parse()
-	logger = promlog.New(promlogConfig)
 
-	// landingPage contains the HTML served at '/'.
-	// TODO: Make this nicer and more informative.
-	var landingPage = []byte(`<html>
-	<head><title>Postgres exporter</title></head>
-	<body>
-	<h1>Postgres exporter</h1>
-	<p><a href='` + *metricPath + `'>Metrics</a></p>
-	</body>
-	</html>
-	`)
+	log.Infoln("Starting postgres_exporter", version.Info())
+	log.Infoln("Build context", version.BuildContext())
 
 	if *onlyDumpMaps {
 		dumpMaps()
 		return
 	}
 
-	dsn, err := getDataSources()
-	if err != nil {
-		level.Error(logger).Log("msg", "Failed reading data sources", "err", err.Error())
-		os.Exit(1)
-	}
-
+	dsn := getDataSources()
 	if len(dsn) == 0 {
-		level.Error(logger).Log("msg", "Couldn't find environment variables describing the datasource to use")
-		os.Exit(1)
+		log.Fatal("couldn't find environment variables describing the datasource to use")
 	}
 
-	opts := []ExporterOpt{
+	queriesEnabled := map[MetricResolution]bool{
+		HR: *collectCustomQueryHr,
+		MR: *collectCustomQueryMr,
+		LR: *collectCustomQueryLr,
+	}
+
+	queriesPath := map[MetricResolution]string{
+		HR: *collectCustomQueryHrDirectory,
+		MR: *collectCustomQueryMrDirectory,
+		LR: *collectCustomQueryLrDirectory,
+	}
+
+	exporter := NewExporter(dsn,
 		DisableDefaultMetrics(*disableDefaultMetrics),
 		DisableSettingsMetrics(*disableSettingsMetrics),
 		AutoDiscoverDatabases(*autoDiscoverDatabases),
-		WithUserQueriesPath(*queriesPath),
+		WithUserQueriesEnabled(queriesEnabled),
+		WithUserQueriesPath(queriesPath),
 		WithConstantLabels(*constantLabelsList),
 		ExcludeDatabases(*excludeDatabases),
-		IncludeDatabases(*includeDatabases),
-	}
-
-	exporter := NewExporter(dsn, opts...)
+	)
 	defer func() {
 		exporter.servers.Close()
 	}()
 
-	prometheus.MustRegister(version.NewCollector(exporterName))
-
 	prometheus.MustRegister(exporter)
 
-	http.Handle(*metricPath, promhttp.Handler())
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=UTF-8") // nolint: errcheck
-		w.Write(landingPage)                                       // nolint: errcheck
-	})
+	version.Branch = Branch
+	version.BuildDate = BuildDate
+	version.Revision = Revision
+	version.Version = VersionShort
+	prometheus.MustRegister(version.NewCollector("postgres_exporter"))
 
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	srv := &http.Server{Addr: *listenAddress}
-	if err := web.ListenAndServe(srv, *webConfig, logger); err != nil {
-		level.Error(logger).Log("msg", "Error running HTTP server", "err", err)
-		os.Exit(1)
-	}
+	psCollector := prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{})
+	goCollector := prometheus.NewGoCollector()
+
+	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricPath, newHandler(map[string]prometheus.Collector{
+		"exporter":         exporter,
+		"standard.process": psCollector,
+		"standard.go":      goCollector,
+	}))
 }
