@@ -696,8 +696,6 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 		}
 	}
 
-	server.mappingMtx.Unlock()
-
 	// Output the version as a special metric only for master database
 	versionDesc := prometheus.NewDesc(fmt.Sprintf("%s_%s", namespace, staticLabelName),
 		"Version string as reported by postgres", []string{"version", "short_version"}, server.labels)
@@ -706,6 +704,8 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 		ch <- prometheus.MustNewConstMetric(versionDesc,
 			prometheus.UntypedValue, 1, versionString, semanticVersion.String())
 	}
+
+	server.mappingMtx.Unlock()
 	return nil
 }
 
