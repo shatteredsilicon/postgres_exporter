@@ -22,6 +22,7 @@ import (
 	"github.com/blang/semver"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 )
 
 // Server describes a connection to Postgres.
@@ -69,7 +70,7 @@ func NewServer(dsn string, opts ...ServerOpt) (*Server, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxIdleConns(1) //TODO: Old exporter has -1?
 
 	level.Info(logger).Log("msg", "Established new database connection", "fingerprint", fingerprint)
 
@@ -98,7 +99,7 @@ func (s *Server) Close() error {
 func (s *Server) Ping() error {
 	if err := s.db.Ping(); err != nil {
 		if cerr := s.Close(); cerr != nil {
-			level.Error(logger).Log("msg", "Error while closing non-pinging DB connection", "server", s, "err", cerr)
+			log.Errorf("Error while closing non-pinging DB connection to %q: %v", s, cerr)
 		}
 		return err
 	}
