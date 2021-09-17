@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
@@ -84,7 +83,7 @@ func (e *Exporter) scrapeDSN(ch chan<- prometheus.Metric, dsn string) error {
 
 	// Check if map versions need to be updated
 	if err := e.checkMapVersions(ch, server); err != nil {
-		level.Warn(logger).Log("msg", "Proceeding with outdated query maps, as the Postgres version could not be determined", "err", err)
+		log.Warnln("Proceeding with outdated query maps, as the Postgres version could not be determined:", err)
 	}
 
 	return server.Scrape(ch, e.disableSettingsMetrics)
