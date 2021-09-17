@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/blang/semver"
-	"github.com/go-kit/kit/log/level"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
@@ -192,7 +191,7 @@ func makeQueryOverrideMap(pgVersion semver.Version, queryOverrides map[string][]
 			}
 		}
 		if !matched {
-			level.Warn(logger).Log("msg", "No query matched override, disabling metric space", "name", name)
+			log.Warnln("No query matched override for", name, "- disabling metric space.")
 			resultMap[name] = ""
 		}
 	}
