@@ -18,4 +18,5 @@
 /.assets-branch
 /.metrics.*.added
 /.metrics.*.removed
+/tools/src
 /cmd/postgres_exporter/postgres_exporter 

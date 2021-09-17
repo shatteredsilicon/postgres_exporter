@@ -55,6 +55,11 @@ vet:
 	@echo ">> vetting code"
 	$(GO) vet $(pkgs)
 
+staticcheck: $(STATICCHECK)
+	@echo ">> running staticcheck"
+	GOOS= GOARCH= $(GO) build -modfile=tools/go.mod -o bin/staticcheck honnef.co/go/tools/cmd/staticcheck
+	bin/staticcheck $(pkgs)
+
 build: promu
 	@echo ">> building binaries"
 	$(PROMU) build --prefix $(PREFIX)
@@ -66,5 +71,8 @@ tarball: promu
 
 docker:
 	docker build -t "$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)" .
+
+promu:
+	GOOS= GOARCH= $(GO) build -modfile=tools/go.mod -o bin/promu github.com/prometheus/promu
 
 .PHONY: all style check_license format build test vet assets tarball docker promu staticcheck bin/staticcheck
