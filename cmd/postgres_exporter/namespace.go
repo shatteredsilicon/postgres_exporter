@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/go-kit/kit/log/level"
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 )
 
 // Query within a namespace mapping and emit metrics. Returns fatal errors if
@@ -190,8 +190,10 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, server *Server) map[str
 	scrapeStart := time.Now()
 
 	for namespace, mapping := range server.metricMap {
+		log.Debugln("Querying namespace: ", namespace)
+
 		if mapping.master && !server.master {
-			level.Debug(logger).Log("msg", "Query skipped...")
+			log.Debugln("Query skipped...")
 			continue
 		}
 
@@ -200,7 +202,7 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, server *Server) map[str
 			serVersion, _ := semver.Parse(server.lastMapVersion.String())
 			runServerRange, _ := semver.ParseRange(server.runonserver)
 			if !runServerRange(serVersion) {
-				level.Debug(logger).Log("msg", "Query skipped for this database version", "version", server.lastMapVersion.String(), "target_version", server.runonserver)
+				log.Debugln("Query skipped...")
 				continue
 			}
 		}
@@ -231,12 +233,12 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, server *Server) map[str
 		// Serious error - a namespace disappeared
 		if err != nil {
 			namespaceErrors[namespace] = err
-			level.Info(logger).Log("err", err)
+			log.Infoln(err)
 		}
 		// Non-serious errors - likely version or parsing problems.
 		if len(nonFatalErrors) > 0 {
 			for _, err := range nonFatalErrors {
-				level.Info(logger).Log("err", err)
+				log.Infoln(err.Error())
 			}
 		}
 

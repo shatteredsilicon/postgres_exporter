@@ -2,13 +2,11 @@ package main
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"math"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -112,6 +110,7 @@ type MetricMapNamespace struct {
 // be mapped to by the collector
 type MetricMap struct {
 	discard    bool                              // Should metric be discarded during mapping?
+	histogram  bool                              // Should metric be treated as a histogram?
 	vtype      prometheus.ValueType              // Prometheus valuetype
 	desc       *prometheus.Desc                  // Prometheus descriptor
 	conversion func(interface{}) (float64, bool) // Conversion function to turn PG result into float64
@@ -607,179 +606,6 @@ func newDesc(subsystem, name, help string, labels prometheus.Labels) *prometheus
 	)
 }
 
-// Query within a namespace mapping and emit metrics. Returns fatal errors if
-// the scrape fails, and a slice of errors if they were non-fatal.
-func queryNamespaceMapping(server *Server, namespace string, mapping MetricMapNamespace) ([]prometheus.Metric, []error, error) {
-	// Check for a query override for this namespace
-	query, found := server.queryOverrides[namespace]
-
-	// Was this query disabled (i.e. nothing sensible can be queried on cu
-	// version of PostgreSQL?
-	if query == "" && found {
-		// Return success (no pertinent data)
-		return []prometheus.Metric{}, []error{}, nil
-	}
-
-	// Don't fail on a bad scrape of one metric
-	var rows *sql.Rows
-	var err error
-
-	if !found {
-		// I've no idea how to avoid this properly at the moment, but this is
-		// an admin tool so you're not injecting SQL right?
-		rows, err = server.db.Query(fmt.Sprintf("SELECT * FROM %s;", namespace)) // nolint: gas, safesql
-	} else {
-		rows, err = server.db.Query(query) // nolint: safesql
-	}
-	if err != nil {
-		return []prometheus.Metric{}, []error{}, fmt.Errorf("Error running query on database %q: %s %v", server, namespace, err)
-	}
-	defer rows.Close() // nolint: errcheck
-
-	var columnNames []string
-	columnNames, err = rows.Columns()
-	if err != nil {
-		return []prometheus.Metric{}, []error{}, errors.New(fmt.Sprintln("Error retrieving column list for: ", namespace, err))
-	}
-
-	// Make a lookup map for the column indices
-	var columnIdx = make(map[string]int, len(columnNames))
-	for i, n := range columnNames {
-		columnIdx[n] = i
-	}
-
-	var columnData = make([]interface{}, len(columnNames))
-	var scanArgs = make([]interface{}, len(columnNames))
-	for i := range columnData {
-		scanArgs[i] = &columnData[i]
-	}
-
-	nonfatalErrors := []error{}
-
-	metrics := make([]prometheus.Metric, 0)
-
-	for rows.Next() {
-		err = rows.Scan(scanArgs...)
-		if err != nil {
-			return []prometheus.Metric{}, []error{}, errors.New(fmt.Sprintln("Error retrieving rows:", namespace, err))
-		}
-
-		// Get the label values for this row.
-		labels := make([]string, len(mapping.labels))
-		for idx, label := range mapping.labels {
-			labels[idx], _ = dbToString(columnData[columnIdx[label]])
-		}
-
-		// Loop over column names, and match to scan data. Unknown columns
-		// will be filled with an untyped metric number *if* they can be
-		// converted to float64s. NULLs are allowed and treated as NaN.
-		for idx, columnName := range columnNames {
-			var metric prometheus.Metric
-			if metricMapping, ok := mapping.columnMappings[columnName]; ok {
-				// Is this a metricy metric?
-				if metricMapping.discard {
-					continue
-				}
-
-				value, ok := dbToFloat64(columnData[idx])
-				if !ok {
-					nonfatalErrors = append(nonfatalErrors, errors.New(fmt.Sprintln("Unexpected error parsing column: ", namespace, columnName, columnData[idx])))
-					continue
-				}
-				// Generate the metric
-				metric = prometheus.MustNewConstMetric(metricMapping.desc, metricMapping.vtype, value, labels...)
-			} else {
-				// Unknown metric. Report as untyped if scan to float64 works, else note an error too.
-				metricLabel := fmt.Sprintf("%s_%s", namespace, columnName)
-				desc := prometheus.NewDesc(metricLabel, fmt.Sprintf("Unknown metric from %s", namespace), mapping.labels, server.labels)
-
-				// Its not an error to fail here, since the values are
-				// unexpected anyway.
-				value, ok := dbToFloat64(columnData[idx])
-				if !ok {
-					nonfatalErrors = append(nonfatalErrors, errors.New(fmt.Sprintln("Unparseable column type - discarding: ", namespace, columnName, err)))
-					continue
-				}
-				metric = prometheus.MustNewConstMetric(desc, prometheus.UntypedValue, value, labels...)
-			}
-			metrics = append(metrics, metric)
-		}
-	}
-	return metrics, nonfatalErrors, nil
-}
-
-// Iterate through all the namespace mappings in the exporter and run their
-// queries.
-func queryNamespaceMappings(ch chan<- prometheus.Metric, server *Server) map[string]error {
-	// Return a map of namespace -> errors
-	namespaceErrors := make(map[string]error)
-
-	scrapeStart := time.Now()
-
-	for namespace, mapping := range server.metricMap {
-		log.Debugln("Querying namespace: ", namespace)
-
-		if mapping.master && !server.master {
-			log.Debugln("Query skipped...")
-			continue
-		}
-
-		scrapeMetric := false
-		// Check if the metric is cached
-		server.cacheMtx.Lock()
-		cachedMetric, found := server.metricCache[namespace]
-		server.cacheMtx.Unlock()
-		// If found, check if needs refresh from cache
-		if found {
-			if scrapeStart.Sub(cachedMetric.lastScrape).Seconds() > float64(mapping.cacheSeconds) {
-				scrapeMetric = true
-			}
-		} else {
-			scrapeMetric = true
-		}
-
-		var metrics []prometheus.Metric
-		var nonFatalErrors []error
-		var err error
-		if scrapeMetric {
-			metrics, nonFatalErrors, err = queryNamespaceMapping(server, namespace, mapping)
-		} else {
-			metrics = cachedMetric.metrics
-		}
-
-		// Serious error - a namespace disappeared
-		if err != nil {
-			namespaceErrors[namespace] = err
-			log.Infoln(err)
-		}
-		// Non-serious errors - likely version or parsing problems.
-		if len(nonFatalErrors) > 0 {
-			for _, err := range nonFatalErrors {
-				log.Infoln(err.Error())
-			}
-		}
-
-		// Emit the metrics into the channel
-		for _, metric := range metrics {
-			ch <- metric
-		}
-
-		if scrapeMetric {
-			// Only cache if metric is meaningfully cacheable
-			if mapping.cacheSeconds > 0 {
-				server.cacheMtx.Lock()
-				server.metricCache[namespace] = cachedMetrics{
-					metrics:    metrics,
-					lastScrape: scrapeStart,
-				}
-				server.cacheMtx.Unlock()
-			}
-		}
-	}
-
-	return namespaceErrors
-}
-
 // Check and update the exporters query maps if the version has changed.
 func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server) error {
 	log.Debugf("Querying Postgres Version on %q", server)
@@ -922,58 +748,6 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 }
 
-func (e *Exporter) discoverDatabaseDSNs() []string {
-	dsns := make(map[string]struct{})
-	for _, dsn := range e.dsn {
-		parsedDSN, err := url.Parse(dsn)
-		if err != nil {
-			log.Errorf("Unable to parse DSN (%s): %v", loggableDSN(dsn), err)
-			continue
-		}
-
-		dsns[dsn] = struct{}{}
-		server, err := e.servers.GetServer(dsn)
-		if err != nil {
-			log.Errorf("Error opening connection to database (%s): %v", loggableDSN(dsn), err)
-			continue
-		}
-
-		// If autoDiscoverDatabases is true, set first dsn as master database (Default: false)
-		server.master = true
-
-		databaseNames, err := queryDatabases(server)
-		if err != nil {
-			log.Errorf("Error querying databases (%s): %v", loggableDSN(dsn), err)
-			continue
-		}
-		for _, databaseName := range databaseNames {
-			if contains(e.excludeDatabases, databaseName) {
-				continue
-			}
-			parsedDSN.Path = databaseName
-			dsns[parsedDSN.String()] = struct{}{}
-		}
-	}
-
-	result := make([]string, len(dsns))
-	index := 0
-	for dsn := range dsns {
-		result[index] = dsn
-		index++
-	}
-
-	return result
-}
-
-func contains(a []string, x string) bool {
-	for _, n := range a {
-		if x == n {
-			return true
-		}
-	}
-	return false
-}
-
 // handler wraps an unfiltered http.Handler but uses a filtered handler,
 // created on the fly, if filtering is requested. Create instances with
 // newHandler. It used for collectors filtering.
@@ -1042,7 +816,7 @@ func (h *handler) innerHandler(filters ...string) (http.Handler, error) {
 	handler := promhttp.HandlerFor(
 		registry,
 		promhttp.HandlerOpts{
-			ErrorLog:      log.NewErrorLogger(),
+			ErrorLog:      log.New(),
 			ErrorHandling: promhttp.ContinueOnError,
 		},
 	)
