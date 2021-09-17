@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
@@ -185,7 +184,7 @@ func (s *Servers) Close() {
 	defer s.m.Unlock()
 	for _, server := range s.servers {
 		if err := server.Close(); err != nil {
-			level.Error(logger).Log("msg", "Failed to close connection", "server", server, "err", err)
+			log.Errorf("failed to close connection to %q: %v", server, err)
 		}
 	}
 }
