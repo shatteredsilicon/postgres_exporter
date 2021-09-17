@@ -17,9 +17,9 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/go-kit/kit/log"
 	"github.com/percona/exporter_shared"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 	"gopkg.in/alecthomas/kingpin.v2"
