@@ -72,7 +72,7 @@ func NewServer(dsn string, opts ...ServerOpt) (*Server, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1) //TODO: Old exporter has -1?
 
-	level.Info(logger).Log("msg", "Established new database connection", "fingerprint", fingerprint)
+	log.Infof("Established new database connection to %q.", fingerprint)
 
 	s := &Server{
 		db:     db,
