@@ -19,4 +19,4 @@
 /.metrics.*.added
 /.metrics.*.removed
 /tools/src
-/vendor
+/cmd/postgres_exporter/postgres_exporter 
