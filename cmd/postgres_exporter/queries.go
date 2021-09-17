@@ -19,11 +19,12 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/go-kit/kit/log/level"
-	"log "github.com/sirupsen/logrus""
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
 // UserQuery represents a user defined query
+// nolint: golint
 type UserQuery struct {
 	Query        string    `yaml:"query"`
 	Metrics      []Mapping `yaml:"metrics"`
@@ -33,6 +34,7 @@ type UserQuery struct {
 }
 
 // UserQueries represents a set of UserQuery objects
+// nolint: golint
 type UserQueries map[string]UserQuery
 
 // OverrideQuery 's are run in-place of simple namespace look ups, and provide
