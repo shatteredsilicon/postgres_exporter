@@ -1390,9 +1390,9 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, server *Server) map[str
 	for namespace, mapping := range metricMap {
 		log.Debugln("Querying namespace: ", namespace)
 
-		server.metricMapMtx.RLock()
+		server.masterMtx.RLock()
 		master := server.master
-		server.metricMapMtx.RUnlock()
+		server.masterMtx.RUnlock()
 		if mapping.master && !master {
 			log.Debugln("Query skipped...")
 			continue
