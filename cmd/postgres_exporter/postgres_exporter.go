@@ -1490,8 +1490,10 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 
 	// Check if semantic version changed and recalculate maps if needed.
 	server.lastMapVersionMtx.RLock()
-	if semanticVersion.NE(server.lastMapVersion) || metricMap == nil {
-		server.lastMapVersionMtx.RUnlock()
+	isVersionEqual := semanticVersion.NE(server.lastMapVersion)
+	server.lastMapVersionMtx.RUnlock()
+
+	if isVersionEqual || metricMap == nil {
 		log.Infof("Semantic Version Changed on %q: %s -> %s", server, server.lastMapVersion, semanticVersion)
 
 		// Get Default Metrics only for master database
@@ -1525,8 +1527,6 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 				e.loadCustomQueries(res, semanticVersion, server)
 			}
 		}
-	} else {
-		server.lastMapVersionMtx.RLock()
 	}
 
 	// Output the version as a special metric only for master database
