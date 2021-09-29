@@ -1475,7 +1475,7 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, server *Server)
 	for key, value := range server.metricMap {
 		metricMap[key] = value
 	}
-	server.lastMapVersionMtx.RUnlock()
+	server.metricMapMtx.RUnlock()
 
 	server.masterMtx.RLock()
 	master := server.master
