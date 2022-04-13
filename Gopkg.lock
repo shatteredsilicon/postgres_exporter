@@ -48,7 +48,7 @@
 
 [[projects]]
   branch = "master"
-  name = "github.com/percona/exporter_shared"
+  name = "github.com/shatteredsilicon/exporter_shared"
   packages = ["."]
   revision = "7d9e9cc0256a3fbb559aa2f3fb9d8d37e3bd1bf5"
 
