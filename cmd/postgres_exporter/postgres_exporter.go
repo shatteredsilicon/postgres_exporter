@@ -2,12 +2,15 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -20,13 +23,13 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
 
 	"strings"
 
-	"github.com/shatteredsilicon/exporter_shared"
+	"github.com/shatteredsilicon/ssm-client/pmm"
+	"github.com/shatteredsilicon/ssm-client/pmm/plugin"
 )
 
 var (
@@ -53,6 +56,14 @@ var (
 	onlyDumpMaps = flag.Bool(
 		"dumpmaps", false,
 		"Do not run, simply dump the maps.",
+	)
+	sslCertFile = flag.String(
+		"web.ssl-cert-file", "",
+		"Path to SSL certificate file.",
+	)
+	sslKeyFile = flag.String(
+		"web.ssl-key-file", "",
+		"Path to SSL key file.",
 	)
 )
 
@@ -1156,6 +1167,102 @@ func main() {
 
 	prometheus.MustRegister(exporter)
 
-	// Use our shared code to run server and exit on error. Upstream's code below will not be executed.
-	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricsPath, promhttp.ContinueOnError)
+	// New http server
+	mux := http.NewServeMux()
+	srv := &http.Server{
+		Addr:    *listenAddress,
+		Handler: mux,
+	}
+
+	landingPage := []byte(`<html>
+<html>
+<head>
+	<title>PostgreSQL exporter</title>
+</head>
+<body>
+	<h1>PostgreSQL exporter</h1>
+	<p><a href="` + *metricsPath + `">Metrics</a></p>
+</body>
+</html>
+`)
+
+	ssl := false
+	if *sslCertFile != "" && *sslKeyFile != "" {
+		if _, err := os.Stat(*sslCertFile); os.IsNotExist(err) {
+			log.Fatal("SSL certificate file does not exist: ", *sslCertFile)
+		}
+		if _, err := os.Stat(*sslKeyFile); os.IsNotExist(err) {
+			log.Fatal("SSL key file does not exist: ", *sslKeyFile)
+		}
+		ssl = true
+		log.Infoln("HTTPS/TLS is enabled")
+	}
+
+	log.Infoln("Listening on", *listenAddress)
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		if ssl {
+			w.Header().Add("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+
+		if req.Method != http.MethodDelete {
+			w.Write(landingPage)
+			return
+		}
+
+		errFunc := func(w http.ResponseWriter, err error) {
+			log.Errorf("remove metrics failed: %s", err.Error())
+
+			errBytes, _ := json.Marshal(map[string]interface{}{
+				"error": fmt.Sprintf("Remove metrics %s failed: %s", plugin.NameLinux, err.Error()),
+			})
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(errBytes)
+			return
+		}
+
+		admin := pmm.Admin{}
+		err := admin.LoadConfig()
+		if err != nil {
+			errFunc(w, err)
+			return
+		}
+
+		err = admin.SetAPI()
+		if err != nil {
+			errFunc(w, err)
+			return
+		}
+
+		err = admin.RemoveMetrics(plugin.NameMySQL)
+		if err != nil {
+			errFunc(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if ssl {
+		// https
+		tlsCfg := &tls.Config{
+			MinVersion:               tls.VersionTLS12,
+			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+			PreferServerCipherSuites: true,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			},
+		}
+		srv.TLSConfig = tlsCfg
+		srv.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0)
+
+		log.Fatal(srv.ListenAndServeTLS(*sslCertFile, *sslKeyFile))
+	} else {
+		// http
+		log.Fatal(srv.ListenAndServe())
+	}
 }

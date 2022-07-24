@@ -1,3 +1,15 @@
 [prune]
   go-tests = true
   unused-packages = true
+
+[[constraint]]
+  name = "github.com/prometheus/client_golang"
+  version = "^0.8.0"
+
+[[override]]
+  name = "golang.org/x/net"
+  revision = "d866cfc389cec985d6fda2859936a575a55a3ab6"
+
+[[override]]
+  name = "github.com/shatteredsilicon/ssm-client"
+  revision = "96459a7bd478a9e2b6beba95fa22c5472e4d7411"
