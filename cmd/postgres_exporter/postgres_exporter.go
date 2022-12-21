@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/blang/semver"
 	_ "github.com/lib/pq"
+	"gopkg.in/ini.v1"
 	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,6 +35,10 @@ var (
 	showVersion = flag.Bool(
 		"version", false,
 		"Print version information.",
+	)
+	configPath = flag.String(
+		"config", "/opt/ss/ssm-client/postgres_exporter.conf",
+		"Path of config file",
 	)
 	listenAddress = flag.String(
 		"web.listen-address", getStringEnv("PG_EXPORTER_WEB_LISTEN_ADDRESS", ":9184"),
@@ -1078,6 +1084,9 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 
 func getDataSource() string {
 	var dsn = os.Getenv("DATA_SOURCE_NAME")
+	if dsn == "" {
+		dsn = lookupConfig("dsn", "").(string)
+	}
 	if len(dsn) == 0 {
 		var user string
 		var pass string
@@ -1125,6 +1134,8 @@ func getBoolEnv(key string, fallback bool) bool {
 	return fallback
 }
 
+var cfg = new(config)
+
 func main() {
 	// Parse flags.
 	flag.Parse()
@@ -1137,7 +1148,16 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *onlyDumpMaps {
+	err := ini.MapTo(cfg, *configPath)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Load config file %s failed: %s", *configPath, err.Error()))
+	}
+
+	// set flags for exporter_shared server
+	flag.Set("web.ssl-cert-file", lookupConfig("web.ssl-cert-file", "").(string))
+	flag.Set("web.ssl-key-file", lookupConfig("web.ssl-key-file", "").(string))
+
+	if lookupConfig("dumpmaps", *onlyDumpMaps).(bool) {
 		dumpMaps()
 		return
 	}
@@ -1147,7 +1167,7 @@ func main() {
 		log.Fatal("couldn't find environment variables describing the datasource to use")
 	}
 
-	exporter := NewExporter(dsn, *disableDefaultMetrics, *queriesPath)
+	exporter := NewExporter(dsn, lookupConfig("disable-default-metrics", *disableDefaultMetrics).(bool), lookupConfig("query-path", *queriesPath).(string))
 	defer func() {
 		if exporter.dbConnection != nil {
 			exporter.dbConnection.Close() // nolint: errcheck
@@ -1157,5 +1177,98 @@ func main() {
 	prometheus.MustRegister(exporter)
 
 	// Use our shared code to run server and exit on error. Upstream's code below will not be executed.
-	exporter_shared.RunServer("PostgreSQL", *listenAddress, *metricsPath, promhttp.ContinueOnError)
+	exporter_shared.RunServer("PostgreSQL", lookupConfig("web.listen-address", *listenAddress).(string), lookupConfig("web.telemetry-path", *metricsPath).(string), promhttp.ContinueOnError)
+}
+
+type config struct {
+	DSN                   string       `ini:"dsn"`
+	DisableDefaultMetrics bool         `ini:"disable-default-metrics"`
+	Dumpmaps              bool         `ini:"dumpmaps"`
+	Web                   webConfig    `ini:"web"`
+	Extend                extendConfig `ini:"extend"`
+}
+
+type webConfig struct {
+	ListenAddress string `ini:"listen-address"`
+	MetricsPath   string `ini:"telemetry-path"`
+	SSLCertFile   string `ini:"ssl-cert-file"`
+	SSLKeyFile    string `ini:"ssl-key-file"`
+}
+
+type extendConfig struct {
+	QueryPath string `ini:"query-path"`
+}
+
+// lookupConfig lookup config from flag
+// or config by name, returns nil if none exists.
+// name should be in this format -> '[section].[key]'
+func lookupConfig(name string, defaultValue interface{}) interface{} {
+	var flagSet bool
+	var flagValue interface{}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			flagSet = true
+			switch reflect.Indirect(reflect.ValueOf(f.Value)).Kind() {
+			case reflect.Bool:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Bool()
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Int()
+			case reflect.Float32, reflect.Float64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Float()
+			case reflect.String:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).String()
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Uint()
+			}
+		}
+	})
+	if flagSet {
+		return flagValue
+	}
+
+	section := ""
+	key := name
+	if i := strings.Index(name, "."); i > 0 {
+		section = name[0:i]
+		if len(name) > i+1 {
+			key = name[i+1:]
+		} else {
+			key = ""
+		}
+	}
+
+	t := reflect.TypeOf(*cfg)
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		iniName := field.Tag.Get("ini")
+		matched := iniName == section
+		if section == "" {
+			matched = iniName == key
+		}
+		if !matched {
+			continue
+		}
+
+		v := reflect.ValueOf(cfg).Elem().Field(i)
+		if section == "" {
+			return v.Interface()
+		}
+
+		if !v.CanAddr() {
+			continue
+		}
+
+		st := reflect.TypeOf(v.Interface())
+		for j := 0; j < st.NumField(); j++ {
+			sectionField := st.Field(j)
+			sectionININame := sectionField.Tag.Get("ini")
+			if sectionININame != key {
+				continue
+			}
+
+			return v.Addr().Elem().Field(j).Interface()
+		}
+	}
+
+	return defaultValue
 }
