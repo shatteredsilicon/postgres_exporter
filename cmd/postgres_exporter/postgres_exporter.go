@@ -221,15 +221,15 @@ var builtinMetricMaps = map[string]map[string]ColumnMapping{
 		"count":   {GAUGE, "Number of locks", nil, nil},
 	},
 	"pg_stat_replication": {
-		"procpid":          {DISCARD, "Process ID of a WAL sender process", nil, semver.MustParseRange("<9.2.0")},
-		"pid":              {DISCARD, "Process ID of a WAL sender process", nil, semver.MustParseRange(">=9.2.0")},
-		"usesysid":         {DISCARD, "OID of the user logged into this WAL sender process", nil, nil},
-		"usename":          {DISCARD, "Name of the user logged into this WAL sender process", nil, nil},
-		"application_name": {DISCARD, "Name of the application that is connected to this WAL sender", nil, nil},
-		"client_addr":      {LABEL, "IP address of the client connected to this WAL sender. If this field is null, it indicates that the client is connected via a Unix socket on the server machine.", nil, nil},
-		"client_hostname":  {DISCARD, "Host name of the connected client, as reported by a reverse DNS lookup of client_addr. This field will only be non-null for IP connections, and only when log_hostname is enabled.", nil, nil},
-		"client_port":      {DISCARD, "TCP port number that the client is using for communication with this WAL sender, or -1 if a Unix socket is used", nil, nil},
-		"backend_start": {DISCARD, "with time zone	Time when this process was started, i.e., when the client connected to this WAL sender", nil, nil},
+		"procpid":                  {DISCARD, "Process ID of a WAL sender process", nil, semver.MustParseRange("<9.2.0")},
+		"pid":                      {DISCARD, "Process ID of a WAL sender process", nil, semver.MustParseRange(">=9.2.0")},
+		"usesysid":                 {DISCARD, "OID of the user logged into this WAL sender process", nil, nil},
+		"usename":                  {DISCARD, "Name of the user logged into this WAL sender process", nil, nil},
+		"application_name":         {DISCARD, "Name of the application that is connected to this WAL sender", nil, nil},
+		"client_addr":              {LABEL, "IP address of the client connected to this WAL sender. If this field is null, it indicates that the client is connected via a Unix socket on the server machine.", nil, nil},
+		"client_hostname":          {DISCARD, "Host name of the connected client, as reported by a reverse DNS lookup of client_addr. This field will only be non-null for IP connections, and only when log_hostname is enabled.", nil, nil},
+		"client_port":              {DISCARD, "TCP port number that the client is using for communication with this WAL sender, or -1 if a Unix socket is used", nil, nil},
+		"backend_start":            {DISCARD, "with time zone	Time when this process was started, i.e., when the client connected to this WAL sender", nil, nil},
 		"backend_xmin":             {DISCARD, "The current backend's xmin horizon.", nil, nil},
 		"state":                    {LABEL, "Current WAL sender state", nil, nil},
 		"sent_location":            {DISCARD, "Last transaction log position sent on this connection", nil, semver.MustParseRange("<10.0.0")},
@@ -1164,6 +1164,7 @@ func main() {
 	// set flags for exporter_shared server
 	flag.Set("web.ssl-cert-file", lookupConfig("web.ssl-cert-file", "").(string))
 	flag.Set("web.ssl-key-file", lookupConfig("web.ssl-key-file", "").(string))
+	flag.Set("web.auth-file", lookupConfig("web.auth-file", "").(string))
 
 	if lookupConfig("dumpmaps", *onlyDumpMaps).(bool) {
 		dumpMaps()
@@ -1201,6 +1202,7 @@ type webConfig struct {
 	MetricsPath   string `ini:"telemetry-path"`
 	SSLCertFile   string `ini:"ssl-cert-file"`
 	SSLKeyFile    string `ini:"ssl-key-file"`
+	AuthFile      string `ini:"auth-file"`
 }
 
 type extendConfig struct {
