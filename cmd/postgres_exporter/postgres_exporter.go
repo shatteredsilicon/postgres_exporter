@@ -1164,7 +1164,7 @@ func main() {
 	// set flags for exporter_shared server
 	flag.Set("web.ssl-cert-file", lookupConfig("web.ssl-cert-file", "").(string))
 	flag.Set("web.ssl-key-file", lookupConfig("web.ssl-key-file", "").(string))
-	flag.Set("web.auth-file", lookupConfig("web.auth-file", "").(string))
+	flag.Set("web.auth-file", lookupConfig("web.auth-file", "/opt/ss/ssm-client/ssm.yml").(string))
 
 	if lookupConfig("dumpmaps", *onlyDumpMaps).(bool) {
 		dumpMaps()
@@ -1198,11 +1198,11 @@ type config struct {
 }
 
 type webConfig struct {
-	ListenAddress string `ini:"listen-address"`
-	MetricsPath   string `ini:"telemetry-path"`
-	SSLCertFile   string `ini:"ssl-cert-file"`
-	SSLKeyFile    string `ini:"ssl-key-file"`
-	AuthFile      string `ini:"auth-file"`
+	ListenAddress string  `ini:"listen-address"`
+	MetricsPath   string  `ini:"telemetry-path"`
+	SSLCertFile   string  `ini:"ssl-cert-file"`
+	SSLKeyFile    string  `ini:"ssl-key-file"`
+	AuthFile      *string `ini:"auth-file"`
 }
 
 type extendConfig struct {
@@ -1258,7 +1258,15 @@ func lookupConfig(name string, defaultValue interface{}) interface{} {
 				continue
 			}
 
-			return v.Addr().Elem().Field(j).Interface()
+			if reflect.ValueOf(v.Addr().Elem().Field(j).Interface()).Kind() != reflect.Ptr {
+				return v.Addr().Elem().Field(j).Interface()
+			}
+
+			if v.Addr().Elem().Field(j).IsNil() {
+				return defaultValue
+			}
+
+			return v.Addr().Elem().Field(j).Elem().Interface()
 		}
 	}
 
