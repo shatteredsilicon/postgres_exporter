@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/blang/semver v3.5.1+incompatible
-	github.com/lib/pq v0.0.0-20171022192043-b609790bd85e
+	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v0.9.0-pre1.0.20171005112915-5cec1d0429b0
 	github.com/prometheus/client_model v0.0.0-20170216185247-6f3806018612
 	github.com/prometheus/common v0.0.0-20180518154759-7600349dcfe1
