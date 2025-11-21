@@ -78,6 +78,10 @@ func (s *pgSetting) metric() prometheus.Metric {
 		panic(fmt.Sprintf("Unsupported vartype %q", s.vartype))
 	}
 
+	if len(shortDesc) == 0 {
+		shortDesc = fmt.Sprintf("The %s metric", prometheus.BuildFQName(namespace, subsystem, name))
+	}
+
 	desc := newDesc(subsystem, name, shortDesc)
 	return prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, val)
 }
