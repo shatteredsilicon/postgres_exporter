@@ -44,7 +44,7 @@ var (
 	listenAddress = kingpin.Flag(
 		"web.listen-address",
 		"Address to listen on for web interface and telemetry.",
-	).Default(getStringEnv("PG_EXPORTER_WEB_LISTEN_ADDRESS", ":9184")).Strings()
+	).Default(getStringEnv("PG_EXPORTER_WEB_LISTEN_ADDRESS", "")).Strings()
 
 	metricsPath = kingpin.Flag(
 		"web.telemetry-path",
