@@ -1,4 +1,0 @@
-/var/log/ssm-postgresql-metrics.log {
-    rotate 30
-    daily
-}
