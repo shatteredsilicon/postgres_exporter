@@ -1197,14 +1197,6 @@ func main() {
 	logger := promslog.New(promslogConfig)
 	slog.SetDefault(logger)
 
-	if os.Getenv("ON_CONFIGURE") == "1" {
-		err := configure()
-		if err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
 	err := ini.MapTo(cfg, *configPath)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Load config file %s failed: %s", *configPath, err.Error()))
@@ -1391,47 +1383,6 @@ func configVisit(visitFn func(string, string, reflect.Value)) {
 			visitFn(section, key, fieldValue)
 		}
 	}
-}
-
-func configure() error {
-	iniCfg, err := ini.Load(*configPath)
-	if err != nil {
-		return err
-	}
-
-	if err = iniCfg.MapTo(cfg); err != nil {
-		return err
-	}
-
-	configVisit(func(section, key string, fieldValue reflect.Value) {
-		flagKey := fmt.Sprintf("%s.%s", section, key)
-		if section == "" {
-			flagKey = key
-		}
-
-		setByUser := setByUserMap[flagKey]
-		kingpinF := kingpin.CommandLine.GetFlag(flagKey)
-		if !setByUser || kingpinF == nil {
-			return
-		}
-
-		// Don't override web.auth-file config
-		if flagKey == webAuthFileFlagName {
-			return
-		}
-
-		iniCfg.Section(section).Key(key).SetValue(kingpinF.Model().Value.String())
-	})
-
-	if dsn := os.Getenv("DATA_SOURCE_NAME"); dsn != "" {
-		iniCfg.Section("exporter").Key("dsn").SetValue(strconv.Quote(dsn))
-	}
-
-	if err = iniCfg.SaveTo(*configPath); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func overrideFlags() {
