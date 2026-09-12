@@ -9,10 +9,13 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/log"
 )
 
 // Query the pg_settings view containing runtime variables
 func querySettings(ch chan<- prometheus.Metric, db *sql.DB) error {
+	log.Debugln("Querying pg_setting view")
+
 	// pg_settings docs: https://www.postgresql.org/docs/current/static/view-pg-settings.html
 	//
 	// NOTE: If you add more vartypes here, you must update the supported

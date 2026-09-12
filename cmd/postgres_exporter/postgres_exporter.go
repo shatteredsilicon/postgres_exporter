@@ -2,14 +2,12 @@ package main
 
 import (
 	"crypto/sha256"
-	"crypto/tls"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
-	"log/slog"
 	"math"
-	"net/http"
 	"net/url"
 	"os"
 	"reflect"
@@ -18,79 +16,50 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alecthomas/kingpin/v2"
 	"github.com/blang/semver"
 	_ "github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/ini.v1"
 	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/promslog"
-	"github.com/prometheus/common/promslog/flag"
+	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
-	"github.com/prometheus/exporter-toolkit/web"
 
 	"strings"
+
+	"github.com/shatteredsilicon/exporter_shared"
 )
 
 var (
-	configPath = kingpin.Flag(
-		"config",
+	showVersion = flag.Bool(
+		"version", false,
+		"Print version information.",
+	)
+	configPath = flag.String(
+		"config", "/opt/ss/ssm-client/postgres_exporter.conf",
 		"Path of config file",
-	).Default("/opt/ss/ssm-client/postgres_exporter.conf").String()
-
-	listenAddress = kingpin.Flag(
-		"web.listen-address",
+	)
+	listenAddress = flag.String(
+		"web.listen-address", getStringEnv("PG_EXPORTER_WEB_LISTEN_ADDRESS", ":9184"),
 		"Address to listen on for web interface and telemetry.",
-	).Default(getStringEnv("PG_EXPORTER_WEB_LISTEN_ADDRESS", "")).Strings()
-
-	metricsPath = kingpin.Flag(
-		"web.telemetry-path",
+	)
+	metricsPath = flag.String(
+		"web.telemetry-path", getStringEnv("PG_EXPORTER_WEB_TELEMETRY_PATH", "/metrics"),
 		"Path under which to expose metrics.",
-	).Default(getStringEnv("PG_EXPORTER_WEB_TELEMETRY_PATH", "/metrics")).String()
-
-	webAuthFile     = kingpin.Flag("web.auth-file", "Path to YAML file with server_user, server_password keys for HTTP Basic authentication.").String()
-	webConfigFile   = kingpin.Flag("web.config.file", "Path to prometheus web config file (YAML).").Default("/opt/ss/ssm-client/postgres_exporter.yml").String()
-	tlsMinVersion   = kingpin.Flag("web.tls-min-version", "Minimum TLS version that is acceptable.").String()
-	tlsMaxVersion   = kingpin.Flag("web.tls-max-version", "Maximum TLS version that is acceptable.").String()
-	tlsCipherSuites = kingpin.Flag(
-		"web.tls-cipher-suites",
-		"A list of enabled TLS 1.0–1.2 cipher suites. Check full list at https://github.com/golang/go/blob/master/src/crypto/tls/cipher_suites.go",
-	).Strings()
-	sslCertFile = kingpin.Flag(
-		"web.ssl-cert-file",
-		"Path to SSL certificate file.",
-	).String()
-	sslKeyFile = kingpin.Flag(
-		"web.ssl-key-file",
-		"Path to SSL key file.",
-	).String()
-	systemdSocket = kingpin.Flag(
-		"web.systemd-socket",
-		"Use systemd socket activation listeners instead of port listeners (Linux only).",
-	).Bool()
-
-	disableDefaultMetrics = kingpin.Flag(
-		"disable-default-metrics",
+	)
+	disableDefaultMetrics = flag.Bool(
+		"disable-default-metrics", getBoolEnv("PG_EXPORTER_DISABLE_DEFAULT_METRICS", false),
 		"Do not include default metrics.",
-	).Default(fmt.Sprintf("%v", getBoolEnv("PG_EXPORTER_DISABLE_DEFAULT_METRICS", false))).Bool()
-
-	queriesPath = kingpin.Flag(
-		"extend.query-path",
+	)
+	queriesPath = flag.String(
+		"extend.query-path", getStringEnv("PG_EXPORTER_EXTEND_QUERY_PATH", ""),
 		"Path to custom queries to run.",
-	).Default(getStringEnv("PG_EXPORTER_EXTEND_QUERY_PATH", "")).String()
-
-	onlyDumpMaps = kingpin.Flag(
-		"dumpmaps",
+	)
+	onlyDumpMaps = flag.Bool(
+		"dumpmaps", false,
 		"Do not run, simply dump the maps.",
-	).Bool()
-
-	_ = kingpin.Flag("c", "").Hidden().Short('c').Action(convertFlagAction('c')).Strings()
-	_ = kingpin.Flag("w", "").Hidden().Short('w').Action(convertFlagAction('w')).Strings()
-	_ = kingpin.Flag("e", "").Hidden().Short('e').Action(convertFlagAction('e')).Strings()
-	_ = kingpin.Flag("t", "").Hidden().Short('t').Action(convertFlagAction('t')).Strings()
+	)
 )
 
 // Metric name parts.
@@ -104,10 +73,9 @@ const (
 	staticLabelName = "static"
 )
 
-const (
-	program             = "postgres_exporter"
-	webAuthFileFlagName = "web.auth-file"
-)
+func init() {
+	prometheus.MustRegister(version.NewCollector("postgres_exporter"))
+}
 
 // ColumnUsage should be one of several enum values which describe how a
 // queried row is to be converted to a Prometheus metric.
@@ -416,7 +384,7 @@ func makeQueryOverrideMap(pgVersion semver.Version, queryOverrides map[string][]
 			}
 		}
 		if !matched {
-			slog.Warn("No query matched override for " + name + " - disabling metric space.")
+			log.Warnln("No query matched override for", name, "- disabling metric space.")
 			resultMap[name] = ""
 		}
 	}
@@ -446,6 +414,7 @@ func addQueries(content []byte, pgVersion semver.Version, exporterMap map[string
 	newQueryOverrides := make(map[string]string)
 
 	for metric, specs := range extra {
+		log.Debugln("New user metric namespace from YAML:", metric)
 		for key, value := range specs.(map[interface{}]interface{}) {
 			switch key.(string) {
 			case "query":
@@ -500,11 +469,23 @@ func addQueries(content []byte, pgVersion semver.Version, exporterMap map[string
 
 	// Merge the two maps (which are now quite flatteend)
 	for k, v := range partialExporterMap {
+		_, found := exporterMap[k]
+		if found {
+			log.Debugln("Overriding metric", k, "from user YAML file.")
+		} else {
+			log.Debugln("Adding new metric", k, "from user YAML file.")
+		}
 		exporterMap[k] = v
 	}
 
 	// Merge the query override map
 	for k, v := range newQueryOverrides {
+		_, found := queryOverrideMap[k]
+		if found {
+			log.Debugln("Overriding query override", k, "from user YAML file.")
+		} else {
+			log.Debugln("Adding new query override", k, "from user YAML file.")
+		}
 		queryOverrideMap[k] = v
 	}
 
@@ -533,7 +514,7 @@ func makeDescMap(pgVersion semver.Version, metricMaps map[string]map[string]Colu
 				if !columnMapping.supportedVersions(pgVersion) {
 					// It's very useful to be able to see what columns are being
 					// rejected.
-					slog.Debug(columnName + " is being forced to discard due to version incompatibility.")
+					log.Debugln(columnName, "is being forced to discard due to version incompatibility.")
 					thisMap[columnName] = MetricMap{
 						discard: true,
 						conversion: func(_ interface{}) (float64, bool) {
@@ -599,7 +580,7 @@ func makeDescMap(pgVersion semver.Version, metricMaps map[string]map[string]Colu
 						case string:
 							durationString = t
 						default:
-							slog.Error("DURATION conversion metric was not a string")
+							log.Errorln("DURATION conversion metric was not a string")
 							return math.NaN(), false
 						}
 
@@ -609,7 +590,7 @@ func makeDescMap(pgVersion semver.Version, metricMaps map[string]map[string]Colu
 
 						d, err := time.ParseDuration(durationString)
 						if err != nil {
-							slog.Error("Failed converting result to metric: "+columnName, "in", in, "err", err)
+							log.Errorln("Failed converting result to metric:", columnName, in, err)
 							return math.NaN(), false
 						}
 						return float64(d / time.Millisecond), true
@@ -669,14 +650,14 @@ func dbToFloat64(t interface{}) (float64, bool) {
 		strV := string(v)
 		result, err := strconv.ParseFloat(strV, 64)
 		if err != nil {
-			slog.Info("Could not parse []byte: " + err.Error())
+			log.Infoln("Could not parse []byte:", err)
 			return math.NaN(), false
 		}
 		return result, true
 	case string:
 		result, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			slog.Info("Could not parse string: " + err.Error())
+			log.Infoln("Could not parse string:", err)
 			return math.NaN(), false
 		}
 		return result, true
@@ -930,16 +911,17 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, db *sql.DB, metricMap m
 	namespaceErrors := make(map[string]error)
 
 	for namespace, mapping := range metricMap {
+		log.Debugln("Querying namespace: ", namespace)
 		nonFatalErrors, err := queryNamespaceMapping(ch, db, namespace, mapping, queryOverrides)
 		// Serious error - a namespace disappeared
 		if err != nil {
 			namespaceErrors[namespace] = err
-			slog.Info(err.Error())
+			log.Infoln(err)
 		}
 		// Non-serious errors - likely version or parsing problems.
 		if len(nonFatalErrors) > 0 {
 			for _, err := range nonFatalErrors {
-				slog.Info(err.Error())
+				log.Infoln(err.Error())
 			}
 		}
 	}
@@ -949,6 +931,7 @@ func queryNamespaceMappings(ch chan<- prometheus.Metric, db *sql.DB, metricMap m
 
 // Check and update the exporters query maps if the version has changed.
 func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, db *sql.DB) error {
+	log.Debugln("Querying Postgres Version")
 	versionRow := db.QueryRow("SELECT version();")
 	var versionString string
 	err := versionRow.Scan(&versionString)
@@ -960,12 +943,12 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, db *sql.DB) err
 		return fmt.Errorf("Error parsing version string: %v", err)
 	}
 	if !e.disableDefaultMetrics && semanticVersion.LT(lowestSupportedVersion) {
-		slog.Warn("PostgreSQL version is lower then our lowest supported version! Got " + semanticVersion.String() + " minimum supported is " + lowestSupportedVersion.String())
+		log.Warnln("PostgreSQL version is lower then our lowest supported version! Got", semanticVersion.String(), "minimum supported is", lowestSupportedVersion.String())
 	}
 
 	// Check if semantic version changed and recalculate maps if needed.
 	if semanticVersion.NE(e.lastMapVersion) || e.metricMap == nil {
-		slog.Info("Semantic Version Changed: " + e.lastMapVersion.String() + " -> " + semanticVersion.String())
+		log.Infoln("Semantic Version Changed:", e.lastMapVersion.String(), "->", semanticVersion.String())
 		e.mappingMtx.Lock()
 
 		if e.disableDefaultMetrics {
@@ -989,13 +972,13 @@ func (e *Exporter) checkMapVersions(ch chan<- prometheus.Metric, db *sql.DB) err
 			// Calculate the hashsum of the useQueries
 			userQueriesData, err := ioutil.ReadFile(e.userQueriesPath)
 			if err != nil {
-				slog.Error("Failed to reload user queries: "+e.userQueriesPath, "err", err)
+				log.Errorln("Failed to reload user queries:", e.userQueriesPath, err)
 				e.userQueriesError.WithLabelValues(e.userQueriesPath, "").Set(1)
 			} else {
 				hashsumStr := fmt.Sprintf("%x", sha256.Sum256(userQueriesData))
 
 				if err := addQueries(userQueriesData, semanticVersion, e.metricMap, e.queryOverrides); err != nil {
-					slog.Error("Failed to reload user queries: "+e.userQueriesPath, "err", err)
+					log.Errorln("Failed to reload user queries:", e.userQueriesPath, err)
 					e.userQueriesError.WithLabelValues(e.userQueriesPath, hashsumStr).Set(1)
 				} else {
 					// Mark user queries as successfully loaded
@@ -1020,7 +1003,7 @@ func (e *Exporter) getDB(conn string) (*sql.DB, error) {
 	// Has dsn changed?
 	if (e.dbConnection != nil) && (e.dsn != e.dbDsn) {
 		err := e.dbConnection.Close()
-		slog.Warn("Error while closing obsolete DB connection: " + err.Error())
+		log.Warnln("Error while closing obsolete DB connection:", err)
 		e.dbConnection = nil
 		e.dbDsn = ""
 	}
@@ -1035,13 +1018,13 @@ func (e *Exporter) getDB(conn string) (*sql.DB, error) {
 		d.SetMaxIdleConns(1)
 		e.dbConnection = d
 		e.dbDsn = e.dsn
-		slog.Info("Established new database connection.")
+		log.Infoln("Established new database connection.")
 	}
 
 	// Always send a ping and possibly invalidate the connection if it fails
 	if err := e.dbConnection.Ping(); err != nil {
 		cerr := e.dbConnection.Close()
-		slog.Info("Error while closing non-pinging DB connection: " + cerr.Error())
+		log.Infoln("Error while closing non-pinging DB connection:", cerr)
 		e.dbConnection = nil
 		e.psqlUp.Set(0)
 		return nil, err
@@ -1070,7 +1053,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 			}
 			loggableDsn = pDsn.String()
 		}
-		slog.Info(fmt.Sprintf("Error opening connection to database (%s): %s", loggableDsn, err))
+		log.Infof("Error opening connection to database (%s): %s", loggableDsn, err)
 		e.psqlUp.Set(0)
 		e.error.Set(1)
 		return
@@ -1081,7 +1064,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 
 	// Check if map versions need to be updated
 	if err := e.checkMapVersions(ch, db); err != nil {
-		slog.Warn("Proceeding with outdated query maps, as the Postgres version could not be determined: " + err.Error())
+		log.Warnln("Proceeding with outdated query maps, as the Postgres version could not be determined:", err)
 		e.error.Set(1)
 	}
 
@@ -1089,7 +1072,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	e.mappingMtx.RLock()
 	defer e.mappingMtx.RUnlock()
 	if err := querySettings(ch, db); err != nil {
-		slog.Info(fmt.Sprintf("Error retrieving settings: %s", err))
+		log.Infof("Error retrieving settings: %s", err)
 		e.error.Set(1)
 	}
 
@@ -1102,7 +1085,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 func getDataSource() string {
 	var dsn = os.Getenv("DATA_SOURCE_NAME")
 	if dsn == "" {
-		dsn = cfg.DSN
+		dsn = lookupConfig("dsn", "").(string)
 	}
 	if len(dsn) == 0 {
 		var user string
@@ -1152,50 +1135,18 @@ func getBoolEnv(key string, fallback bool) bool {
 }
 
 var cfg = new(config)
-var setByUserMap = make(map[string]bool)
-
-func init() {
-	kingpin.CommandLine.PreAction(setByUserFlagAction())
-}
-
-func setByUserFlagAction() func(ctx *kingpin.ParseContext) error {
-	executed := false
-
-	return func(pc *kingpin.ParseContext) error {
-		if executed {
-			return nil
-		}
-
-		for _, elem := range pc.Elements {
-			if elem.Clause == nil {
-				continue
-			}
-
-			flagClause, ok := elem.Clause.(*kingpin.FlagClause)
-			if !ok || flagClause == nil {
-				continue
-			}
-
-			setByUserMap[flagClause.Model().Name] = true
-		}
-
-		executed = true
-		return nil
-	}
-}
 
 func main() {
-	kingpin.Version(version.Print(program))
-	kingpin.HelpFlag.Short('h')
-	kingpin.Parse()
+	// Parse flags.
+	flag.Parse()
 
-	promslogConfig := &promslog.Config{}
-	flag.AddFlags(kingpin.CommandLine, promslogConfig)
-	if os.Getenv("DEBUG") == "1" {
-		promslogConfig.Level.Set("debug")
+	log.Infoln("Starting postgres_exporter", version.Info())
+	log.Infoln("Build context", version.BuildContext())
+
+	if *showVersion {
+		fmt.Fprintln(os.Stdout, version.Print("postgres_exporter"))
+		os.Exit(0)
 	}
-	logger := promslog.New(promslogConfig)
-	slog.SetDefault(logger)
 
 	if os.Getenv("ON_CONFIGURE") == "1" {
 		err := configure()
@@ -1207,128 +1158,35 @@ func main() {
 
 	err := ini.MapTo(cfg, *configPath)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Load config file %s failed: %s", *configPath, err.Error()))
-		os.Exit(1)
+		log.Fatal(fmt.Sprintf("Load config file %s failed: %s", *configPath, err.Error()))
 	}
 
-	// override flag value with config value
-	// if it's not set
-	overrideFlags()
+	// set flags for exporter_shared server
+	flag.Set("web.ssl-cert-file", lookupConfig("web.ssl-cert-file", "").(string))
+	flag.Set("web.ssl-key-file", lookupConfig("web.ssl-key-file", "").(string))
+	flag.Set("web.auth-file", lookupConfig("web.auth-file", "/opt/ss/ssm-client/ssm.yml").(string))
 
-	if *onlyDumpMaps {
+	if lookupConfig("dumpmaps", *onlyDumpMaps).(bool) {
 		dumpMaps()
 		return
 	}
 
 	dsn := getDataSource()
 	if len(dsn) == 0 {
-		slog.Error("couldn't find environment variables describing the datasource to use")
-		os.Exit(1)
+		log.Fatal("couldn't find environment variables describing the datasource to use")
 	}
 
-	exporter := NewExporter(dsn, *disableDefaultMetrics, *queriesPath)
+	exporter := NewExporter(dsn, lookupConfig("disable-default-metrics", *disableDefaultMetrics).(bool), lookupConfig("query-path", *queriesPath).(string))
 	defer func() {
 		if exporter.dbConnection != nil {
 			exporter.dbConnection.Close() // nolint: errcheck
 		}
 	}()
 
-	handlerFunc := newHandler(exporter)
-	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	prometheus.MustRegister(exporter)
 
-	var authC authConfig
-	if *webAuthFile != "" {
-		authConfigBytes, err := os.ReadFile(*webAuthFile)
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
-		if err := yaml.Unmarshal(authConfigBytes, &authC); err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
-	}
-
-	tlsMinVer := (web.TLSVersion)(tls.VersionTLS12)
-	tlsMaxVer := (web.TLSVersion)(tls.VersionTLS13)
-	if tlsMinVersion != nil && *tlsMinVersion != "" {
-		if err := yaml.Unmarshal([]byte(*tlsMinVersion), &tlsMinVer); err != nil {
-			logger.Error(fmt.Sprintf("Unsupported tls minimum version: %s", *tlsMinVersion))
-			os.Exit(1)
-		}
-	}
-	if tlsMaxVersion != nil && *tlsMaxVersion != "" {
-		if err := yaml.Unmarshal([]byte(*tlsMaxVersion), &tlsMaxVer); err != nil {
-			logger.Error(fmt.Sprintf("Unsupported tls maximum version: %s", *tlsMaxVersion))
-			os.Exit(1)
-		}
-	}
-
-	cipherSuites := []web.Cipher{}
-	if tlsCipherSuites != nil && len(*tlsCipherSuites) != 0 {
-		allCipherSuites := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
-		for _, tlsCipherSuite := range *tlsCipherSuites {
-			var cipherSuite *tls.CipherSuite
-			for _, v := range allCipherSuites {
-				if v.Name == tlsCipherSuite {
-					cipherSuite = v
-					break
-				}
-			}
-			if cipherSuite == nil {
-				logger.Error(fmt.Sprintf("Unsupported cipher suite: %s", tlsCipherSuite))
-				os.Exit(1)
-			}
-			cipherSuites = append(cipherSuites, web.Cipher(cipherSuite.ID))
-		}
-	}
-
-	prometheusWebConfig := prometheusWebConfig{
-		TLSConfig: prometheusTLSConfig{
-			MinVersion:   &tlsMinVer,
-			MaxVersion:   &tlsMaxVer,
-			CipherSuites: cipherSuites,
-		},
-	}
-	if authC.ServerUser != "" {
-		hashedPsw, err := bcrypt.GenerateFromPassword([]byte(authC.ServerPassword), 0)
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
-		prometheusWebConfig.Users = map[string]string{
-			authC.ServerUser: string(hashedPsw),
-		}
-	}
-	if *sslCertFile != "" || *sslKeyFile != "" {
-		prometheusWebConfig.TLSConfig.TLSCertPath = *sslCertFile
-		prometheusWebConfig.TLSConfig.TLSKeyPath = *sslKeyFile
-	}
-
-	if *webConfigFile == "" {
-		logger.Error("Use web.config.file flag/config to tell the location of prometheus web file")
-		os.Exit(1)
-	}
-	webConfigBytes, err := yaml.Marshal(prometheusWebConfig)
-	if err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
-	}
-	if err = os.WriteFile(*webConfigFile, webConfigBytes, 0600); err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
-	}
-
-	srv := &http.Server{}
-	toolkitFlags := &web.FlagConfig{
-		WebSystemdSocket:   systemdSocket,
-		WebListenAddresses: listenAddress,
-		WebConfigFile:      webConfigFile,
-	}
-	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
-		logger.Error("Error starting HTTP server", "err", err)
-		os.Exit(1)
-	}
+	// Use our shared code to run server and exit on error. Upstream's code below will not be executed.
+	exporter_shared.RunServer("PostgreSQL", lookupConfig("web.listen-address", *listenAddress).(string), lookupConfig("web.telemetry-path", *metricsPath).(string), promhttp.ContinueOnError)
 }
 
 type config struct {
@@ -1351,7 +1209,102 @@ type extendConfig struct {
 	QueryPath string `ini:"query-path"`
 }
 
-func configVisit(visitFn func(string, string, reflect.Value)) {
+// lookupConfig lookup config from flag
+// or config by name, returns nil if none exists.
+// name should be in this format -> '[section].[key]'
+func lookupConfig(name string, defaultValue interface{}) interface{} {
+	flagSet, flagValue := lookupFlag(name)
+	if flagSet {
+		return flagValue
+	}
+
+	section := ""
+	key := name
+	if i := strings.Index(name, "."); i > 0 {
+		section = name[0:i]
+		if len(name) > i+1 {
+			key = name[i+1:]
+		} else {
+			key = ""
+		}
+	}
+
+	t := reflect.TypeOf(*cfg)
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		iniName := field.Tag.Get("ini")
+		matched := iniName == section
+		if section == "" {
+			matched = iniName == key
+		}
+		if !matched {
+			continue
+		}
+
+		v := reflect.ValueOf(cfg).Elem().Field(i)
+		if section == "" {
+			return v.Interface()
+		}
+
+		if !v.CanAddr() {
+			continue
+		}
+
+		st := reflect.TypeOf(v.Interface())
+		for j := 0; j < st.NumField(); j++ {
+			sectionField := st.Field(j)
+			sectionININame := sectionField.Tag.Get("ini")
+			if sectionININame != key {
+				continue
+			}
+
+			if reflect.ValueOf(v.Addr().Elem().Field(j).Interface()).Kind() != reflect.Ptr {
+				return v.Addr().Elem().Field(j).Interface()
+			}
+
+			if v.Addr().Elem().Field(j).IsNil() {
+				return defaultValue
+			}
+
+			return v.Addr().Elem().Field(j).Elem().Interface()
+		}
+	}
+
+	return defaultValue
+}
+
+func lookupFlag(name string) (flagSet bool, flagValue interface{}) {
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			flagSet = true
+			switch reflect.Indirect(reflect.ValueOf(f.Value)).Kind() {
+			case reflect.Bool:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Bool()
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Int()
+			case reflect.Float32, reflect.Float64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Float()
+			case reflect.String:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).String()
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				flagValue = reflect.Indirect(reflect.ValueOf(f.Value)).Uint()
+			}
+		}
+	})
+
+	return
+}
+
+func configure() error {
+	iniCfg, err := ini.Load(*configPath)
+	if err != nil {
+		return err
+	}
+
+	if err = iniCfg.MapTo(cfg); err != nil {
+		return err
+	}
+
 	type item struct {
 		value   reflect.Value
 		section string
@@ -1368,63 +1321,42 @@ func configVisit(visitFn func(string, string, reflect.Value)) {
 			fieldValue := items[i].value.Field(j)
 			fieldType := items[i].value.Type().Field(j)
 			section := items[i].section
-			key := strings.SplitN(fieldType.Tag.Get("ini"), ",", 2)[0]
+			key := fieldType.Tag.Get("ini")
 
 			if fieldValue.Kind() == reflect.Struct {
-				if fieldValue.CanAddr() {
-					if section == "" {
-						section = key
-					} else if section != key {
-						section = fmt.Sprintf("%s.%s", section, key)
-					}
-
+				if fieldValue.CanAddr() && section == "" {
 					items = append(items, item{
 						value:   fieldValue.Addr().Elem(),
-						section: section,
+						section: key,
 					})
 				}
 				continue
-			} else if fieldValue.Kind() == reflect.Ptr && fieldValue.Type().Elem().Kind() == reflect.String && fieldValue.IsNil() {
+			}
+
+			flagSet, flagValue := lookupFlag(fmt.Sprintf("%s.%s", section, key))
+			if !flagSet {
 				continue
 			}
 
-			visitFn(section, key, fieldValue)
+			if fieldValue.IsValid() && fieldValue.CanSet() {
+				switch fieldValue.Kind() {
+				case reflect.Bool:
+					iniCfg.Section(section).Key(key).SetValue(fmt.Sprintf("%t", flagValue.(bool)))
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+					iniCfg.Section(section).Key(key).SetValue(fmt.Sprintf("%d", flagValue.(int64)))
+				case reflect.Float32, reflect.Float64:
+					iniCfg.Section(section).Key(key).SetValue(fmt.Sprintf("%f", flagValue.(float64)))
+				case reflect.String:
+					iniCfg.Section(section).Key(key).SetValue(strconv.Quote(flagValue.(string)))
+				case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+					iniCfg.Section(section).Key(key).SetValue(fmt.Sprintf("%d", flagValue.(uint64)))
+				}
+			}
 		}
 	}
-}
 
-func configure() error {
-	iniCfg, err := ini.Load(*configPath)
-	if err != nil {
-		return err
-	}
-
-	if err = iniCfg.MapTo(cfg); err != nil {
-		return err
-	}
-
-	configVisit(func(section, key string, fieldValue reflect.Value) {
-		flagKey := fmt.Sprintf("%s.%s", section, key)
-		if section == "" {
-			flagKey = key
-		}
-
-		setByUser := setByUserMap[flagKey]
-		kingpinF := kingpin.CommandLine.GetFlag(flagKey)
-		if !setByUser || kingpinF == nil {
-			return
-		}
-
-		// Don't override web.auth-file config
-		if flagKey == webAuthFileFlagName {
-			return
-		}
-
-		iniCfg.Section(section).Key(key).SetValue(kingpinF.Model().Value.String())
-	})
-
-	if dsn := os.Getenv("DATA_SOURCE_NAME"); dsn != "" {
-		iniCfg.Section("exporter").Key("dsn").SetValue(strconv.Quote(dsn))
+	if os.Getenv("DATA_SOURCE_NAME") != "" {
+		iniCfg.Section("").Key("dsn").SetValue(strconv.Quote(os.Getenv("DATA_SOURCE_NAME")))
 	}
 
 	if err = iniCfg.SaveTo(*configPath); err != nil {
@@ -1432,151 +1364,4 @@ func configure() error {
 	}
 
 	return nil
-}
-
-func overrideFlags() {
-	configVisit(func(section, key string, fieldValue reflect.Value) {
-		flagKey := fmt.Sprintf("%s.%s", section, key)
-		if section == "" {
-			flagKey = key
-		}
-
-		setByUser := setByUserMap[flagKey]
-		kingpinF := kingpin.CommandLine.GetFlag(flagKey)
-		if setByUser || kingpinF == nil {
-			return
-		}
-
-		var values []reflect.Value
-		if fieldValue.Kind() == reflect.Slice {
-			for i := 0; i < fieldValue.Len(); i++ {
-				values = append(values, fieldValue.Index(i))
-			}
-		} else {
-			values = []reflect.Value{fieldValue}
-		}
-
-		for i := range values {
-			switch values[i].Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Float32, reflect.Int64:
-				kingpinF.Model().Value.Set(strconv.FormatInt(values[i].Int(), 10))
-			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				kingpinF.Model().Value.Set(strconv.FormatUint(values[i].Uint(), 10))
-			case reflect.Bool:
-				kingpinF.Model().Value.Set(strconv.FormatBool(values[i].Bool()))
-			case reflect.Ptr:
-				if !values[i].IsNil() {
-					if values[i].Elem().Kind() == reflect.Bool {
-						kingpinF.Model().Value.Set(strconv.FormatBool(values[i].Elem().Bool()))
-					} else {
-						kingpinF.Model().Value.Set(values[i].Elem().String())
-					}
-				}
-			default:
-				kingpinF.Model().Value.Set(values[i].String())
-			}
-		}
-	})
-}
-
-func newHandler(exporter *Exporter) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		registry := prometheus.NewRegistry()
-		registry.MustRegister(exporter)
-
-		gatherers := prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-			registry,
-		}
-
-		// Delegate http serving to Prometheus client library, which will call collector.Collect.
-		h := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})
-		h.ServeHTTP(w, r)
-	}
-}
-
-type authConfig struct {
-	ServerUser     string `yaml:"server_user,omitempty"`
-	ServerPassword string `yaml:"server_password,omitempty"`
-}
-
-type prometheusWebConfig struct {
-	TLSConfig prometheusTLSConfig `yaml:"tls_server_config"`
-	Users     map[string]string   `yaml:"basic_auth_users"`
-}
-
-type prometheusTLSConfig struct {
-	TLSCertPath  string          `yaml:"cert_file"`
-	TLSKeyPath   string          `yaml:"key_file"`
-	MinVersion   *web.TLSVersion `yaml:"min_version"`
-	MaxVersion   *web.TLSVersion `yaml:"max_version"`
-	CipherSuites []web.Cipher    `yaml:"cipher_suites,omitempty"`
-}
-
-// this function is for translating single-hyphen flags into long flags,
-// to make it compatible with earily PMM/SSM version of node_exporter
-func convertFlagAction(short rune) func(ctx *kingpin.ParseContext) error {
-	convertedMap := make(map[rune]bool)
-
-	return func(pc *kingpin.ParseContext) error {
-		if convertedMap[short] {
-			return nil
-		}
-
-		for _, elem := range pc.Elements {
-			if elem.Clause == nil {
-				continue
-			}
-
-			flagClause, ok := elem.Clause.(*kingpin.FlagClause)
-			if !ok || flagClause.Model().Short != short {
-				continue
-			}
-
-			ctx, err := kingpin.CommandLine.ParseContext([]string{fmt.Sprintf("--%c%s", short, *elem.Value)})
-			if err != nil && ctx != nil && len(ctx.Elements) > 0 && ctx.Elements[0].Clause != nil {
-				// with standard flag package, single-hyphen bool flag is in format
-				// '-<name>=<bool>', this code block here tries to translate it into
-				// kingpin long bool flag
-
-				clause, ok := ctx.Elements[0].Clause.(*kingpin.FlagClause)
-				if !ok || !clause.Model().IsBoolFlag() {
-					return err
-				}
-
-				boolStrs := strings.Split(*elem.Value, "=")
-				if len(boolStrs) == 1 {
-					return err
-				}
-
-				var boolValue bool
-				boolValue, err = strconv.ParseBool(boolStrs[len(boolStrs)-1])
-				if err != nil {
-					return err
-				}
-
-				if boolValue {
-					ctx, err = kingpin.CommandLine.ParseContext([]string{fmt.Sprintf("--%s", clause.Model().Name)})
-				} else {
-					ctx, err = kingpin.CommandLine.ParseContext([]string{fmt.Sprintf("--no-%s", clause.Model().Name)})
-				}
-			}
-			if err != nil || ctx == nil || len(ctx.Elements) == 0 || ctx.Elements[0].Clause == nil {
-				return err
-			}
-
-			flag, ok := ctx.Elements[0].Clause.(*kingpin.FlagClause)
-			if !ok {
-				return fmt.Errorf("unknow flag")
-			}
-
-			setByUserMap[flag.Model().Name] = true
-			if err = flag.Model().Value.Set(*ctx.Elements[0].Value); err != nil {
-				return err
-			}
-		}
-
-		convertedMap[short] = true
-		return nil
-	}
 }
